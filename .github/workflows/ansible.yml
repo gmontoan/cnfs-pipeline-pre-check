@@ -1,0 +1,61 @@
+---
+# NAME: Github Workflow for Ansible Lint Code Quality Testing
+#   https://docs.github.com/en/actions/quickstart
+# DESCRIPTION: This workflow will run ansible-lint on the codebase.
+# It will additionally cache the `.ansible` folder, which
+# Ansible Lint generates to store the downloaded roles and collections,
+# which will speed up subsequent runs. It is triggered on push as well as
+# pull requests to the repository.
+#   https://github.com/marketplace/actions/run-ansible-lint
+# SOURCE: Source of truth on this configuration is located here:
+#   https://github.com/ansiblejunky/ansible-project-template/blob/master/.github/workflows/ansible.yml
+# OWNER: John Wadleigh
+
+name: ansible
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - '*'
+      - '!main'
+jobs:
+  test:
+    name: container-linter
+    runs-on: ubuntu-latest
+    environment: ansible-lint # create environment in the repository settings
+    container:
+      image: ghcr.io/ansible/community-ansible-dev-tools:latest # https://ansible.readthedocs.io/projects/dev-tools/container/
+      options: --user root
+      ports:
+        - 80
+      env:
+        ANSIBLE_GALAXY_SERVER_CERTIFIED_TOKEN: ${{ secrets.ANSIBLE_GALAXY_SERVER_CERTIFIED_TOKEN }}
+        ANSIBLE_GALAXY_SERVER_CERTIFIED_URL: ${{ vars.ANSIBLE_GALAXY_SERVER_CERTIFIED_URL }}
+        ANSIBLE_GALAXY_SERVER_CERTIFIED_AUTH_URL: ${{ vars.ANSIBLE_GALAXY_SERVER_CERTIFIED_AUTH_URL }}
+        ANSIBLE_GALAXY_SERVER_VALIDATED_URL: ${{ vars.ANSIBLE_GALAXY_SERVER_VALIDATED_URL }}
+        ANSIBLE_GALAXY_SERVER_VALIDATED_AUTH_URL: ${{ vars.ANSIBLE_GALAXY_SERVER_VALIDATED_AUTH_URL }}
+        ANSIBLE_GALAXY_SERVER_VALIDATED_TOKEN: ${{ secrets.ANSIBLE_GALAXY_SERVER_VALIDATED_TOKEN }}
+        ANSIBLE_GALAXY_SERVER_COMMUNITY_URL: ${{ vars.ANSIBLE_GALAXY_SERVER_COMMUNITY_URL }}
+        ANSIBLE_GALAXY_SERVER_LIST: ${{ vars.ANSIBLE_GALAXY_SERVER_LIST }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+      - name: Cache content
+        id: cache-action
+        uses: actions/cache@v4
+        with:
+          path: .ansible
+          key: ${{ runner.os }}-cache-key
+      - name: Install python dependencies
+        uses: BSFishy/pip-action@v1
+        with:
+          requirements: requirements.txt
+        if: success() || failure()
+      - name: Run ansible linter
+        run: ansible-lint
+        if: success() || failure()
+      - name: Run python linter
+        uses: astral-sh/ruff-action@v3
+        if: success() || failure()

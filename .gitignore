@@ -1,0 +1,15 @@
+# NAME: git ignore settings
+# SOURCE: Source of truth on this configuration is located here:
+#   https://github.com/ansiblejunky/ansible-project-template/blob/master/.gitignore
+
+# Ansible
+*.retry
+*.log
+collections/ansible_collections
+.ansible
+
+# Python
+*.pyc
+.python-version
+.DS_Store
+.ruff_cache
