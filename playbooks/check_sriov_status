@@ -1,0 +1,51 @@
+---
+- name: Verifica o Status das Interfaces SR-IOV no Host
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  # Defina a variável 'target_node' ao rodar o playbook (ex: -e "target_node=worker-01")
+  vars:
+    sriov_namespace: openshift-sriov-network-operator
+    sriov_cr_name: "{{ target_node }}"
+    sriov_interfaces_status: []
+
+  tasks:
+    - name: 1. Busca o Custom Resource SriovNetworkNodeState do Host
+      kubernetes.core.k8s_info:
+        api_version: sriovnetwork.openshift.io/v1
+        kind: SriovNetworkNodeState
+        name: "{{ sriov_cr_name }}"
+        namespace: "{{ sriov_namespace }}"
+      register: sriov_node_state
+      # Ignora se o CR não for encontrado (pode significar que o nó não tem SR-IOV)
+      ignore_errors: yes
+
+    - name: 2. Verifica se o CR foi encontrado
+      fail:
+        msg: "O Custom Resource SriovNetworkNodeState '{{ sriov_cr_name }}' não foi encontrado. Verifique se o nó existe e se o SR-IOV Operator está instalado."
+      when: sriov_node_state.result is undefined or sriov_node_state.result.api_version is defined and sriov_node_state.result.api_version == "sriovnetwork.openshift.io/v1" and sriov_node_state.resources | length == 0
+
+    - name: 3. Extrai as interfaces configuradas
+      set_fact:
+        sriov_interfaces_status: "{{ sriov_node_state.resources[0].status.interfaces | default([]) }}"
+      when: sriov_node_state.resources | length > 0
+
+    - name: 4. Verifica se há interfaces SR-IOV ativas (com VFs)
+      ansible.builtin.debug:
+        msg: |
+          A verificação SR-IOV para o host '{{ target_node }}' foi concluída.
+          Total de Interfaces Encontradas: {{ sriov_interfaces_status | length }}
+          Interfaces Configuradas com VFs (Virtual Functions):
+          {% for interface in sriov_interfaces_status %}
+            {% if interface.numVfs | default(0) > 0 %}
+            - Interface: {{ interface.name }} (Driver: {{ interface.driver }}), VFs Ativas: {{ interface.numVfs }}
+            {% endif %}
+          {% endfor %}
+      when: sriov_interfaces_status | length > 0
+
+    - name: 5. Reporta que nenhuma interface SR-IOV está configurada
+      ansible.builtin.debug:
+        msg: "Nenhuma interface SR-IOV (com VFs configuradas) foi encontrada no host '{{ target_node }}' de acordo com o SriovNetworkNodeState."
+        verbosity: 1
+      when: sriov_interfaces_status | length == 0
