@@ -1,0 +1,70 @@
+---
+- name: Relatório de Recursos e Rede do Cluster OpenShift
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    # Inicializa variáveis para a soma
+    total_cpu_cores: 0
+    total_memory_bytes: 0
+    total_storage_bytes: 0
+
+  tasks:
+    # ---------------------------------------------------------
+    # PARTE 1: Coleta de Recursos (CPU, Memória, Disco)
+    # ---------------------------------------------------------
+    - name: Buscar informações de todos os Nodes
+      kubernetes.core.k8s_info:
+        kind: Node
+      register: node_list
+
+    - name: Calcular totais do Cluster
+      set_fact:
+        # Conversão simplificada: K8s retorna CPU em cores (ex: 4 ou 500m) e Memoria em Ki
+        # Nota: Esta lógica assume que o output vem padronizado em Ki para Memória/Disco.
+        total_cpu_cores: "{{ total_cpu_cores | float + (item.status.capacity.cpu | regex_replace('m', '') | float / 1000 if 'm' in item.status.capacity.cpu else item.status.capacity.cpu | float) }}"
+        total_memory_bytes: "{{ total_memory_bytes | float + (item.status.capacity.memory | regex_replace('Ki', '') | float * 1024) }}"
+        total_storage_bytes: "{{ total_storage_bytes | float + (item.status.capacity['ephemeral-storage'] | regex_replace('Ki', '') | float * 1024) }}"
+      loop: "{{ node_list.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    # ---------------------------------------------------------
+    # PARTE 2: Coleta de Funcionalidades de Rede
+    # ---------------------------------------------------------
+    - name: Buscar Configuração de Rede do Cluster
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: net_config
+
+    - name: Buscar Status do Operador de Rede (Network Operator)
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterOperator
+        name: network
+      register: net_operator
+
+    # ---------------------------------------------------------
+    # PARTE 3: Exibição do Relatório
+    # ---------------------------------------------------------
+    - name: 📊 RELATÓRIO FINAL DO CLUSTER
+      debug:
+        msg:
+          - "=========================================================="
+          - "               CAPACIDADE TOTAL DO CLUSTER                "
+          - "=========================================================="
+          - "Nós Ativos:       {{ node_list.resources | length }}"
+          - "Total CPU:        {{ total_cpu_cores | round(1) }} vCPUs"
+          - "Total Memória:    {{ (total_memory_bytes / 1024 / 1024 / 1024) | round(2) }} GiB"
+          - "Total Disco Local:{{ (total_storage_bytes / 1024 / 1024 / 1024) | round(2) }} GiB (Ephemeral Storage)"
+          - " "
+          - "=========================================================="
+          - "               FUNCIONALIDADES DE REDE                    "
+          - "=========================================================="
+          - "Tipo de Rede (CNI): {{ net_config.resources[0].spec.networkType }}"
+          - "Cluster Network (Pod IPs): {{ net_config.resources[0].spec.clusterNetwork[0].cidr }}"
+          - "Service Network (Svc IPs): {{ net_config.resources[0].spec.serviceNetwork[0] }}"
+          - "Status do Operador: {{ '✅ Disponível' if net_operator.resources[0].status.conditions | selectattr('type', 'equalto', 'Available') | map(attribute='status') | first == 'True' else '❌ Com Problemas' }}"
+          - "=========================================================="
