@@ -1,0 +1,41 @@
+---
+- name: Test OpenShift EE and Connectivity
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    # ------------------------------------------------------------------
+    # TESTE 1: Verificar Dependências Python (Diagnóstico do EE)
+    # ------------------------------------------------------------------
+    - name: 1. Verify if Python libraries are installed in the EE
+      ansible.builtin.command: >
+        python3 -c "import kubernetes; import openshift; print('✅ Libraries Found')"
+      register: python_check
+      changed_when: false
+      failed_when: python_check.rc != 0
+      ignore_errors: true
+
+    - name: Debug Python Lib Status
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'OK: Bibliotecas Python encontradas.' if python_check.rc == 0 
+          else 'ERRO: As bibliotecas "kubernetes" ou "openshift" NÃO estão instaladas neste EE via pip.' }}
+
+    # ------------------------------------------------------------------
+    # TESTE 2: Verificar Collection e Autenticação (Diagnóstico de Conexão)
+    # ------------------------------------------------------------------
+    - name: 2. Attempt to connect to OpenShift API (List Nodes)
+      kubernetes.core.k8s_info:
+        kind: Node
+        # No AAP, se você anexou a Credencial, não precisa passar kubeconfig aqui.
+        # O módulo usará automaticamente as variáveis de ambiente injetadas.
+      register: ocp_nodes
+      ignore_errors: true
+
+    - name: Display Connection Results
+      ansible.builtin.debug:
+        msg:
+          - "Status da Conexão: {{ '✅ SUCESSO' if not ocp_nodes.failed else '❌ FALHA' }}"
+          - "Mensagem de Erro: {{ ocp_nodes.msg | default('Nenhum erro') }}"
+          - "Nós Encontrados: {{ ocp_nodes.resources | length if not ocp_nodes.failed else 0 }}"
