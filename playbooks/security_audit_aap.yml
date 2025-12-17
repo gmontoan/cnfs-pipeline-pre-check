@@ -8,7 +8,7 @@
     target_namespace: "all"
     system_namespaces_regex: "^(openshift-|kube-|default$|logging$|monitoring$)"
     # Lista de Capabilities perigosas (Red Hat Best Practices)
-    dangerous_caps: ['SYS_ADMIN', 'NET_ADMIN', 'IPC_LOCK', 'SYS_PTRACE', 'DAC_OVERRIDE']
+    dangerous_caps: ['SYS_ADMIN', 'NET_ADMIN']
 
   tasks:
     # ==============================================================================
