@@ -1,0 +1,117 @@
+---
+- name: AAP OpenShift Security Audit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Variável padrão que deve ser sobrescrita pelo Survey do AAP.
+    # Opções: "all" ou nome do namespace (ex: "minha-app")
+    target_namespace: "all"
+
+    # Regex de namespaces de sistema para ignorar caso target seja 'all'
+    system_namespaces_regex: "^(openshift-|kube-|default$|logging$|monitoring$)"
+
+  tasks:
+    - name: 1. Coletar Pods (Otimizado para AAP)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        api_version: v1
+        # Se for 'all', o parametro namespace é omitido (busca global).
+        # Se for específico, busca apenas naquele namespace (economiza memória).
+        namespace: "{{ target_namespace if target_namespace != 'all' else omit }}"
+      register: fetched_pods
+
+    - name: 2. Filtrar Namespaces de Sistema (Pós-processamento)
+      set_fact:
+        audit_scope_pods: >-
+          {{
+            fetched_pods.resources 
+            | rejectattr('metadata.namespace', 'match', system_namespaces_regex)
+            | list
+            if target_namespace == 'all' 
+            else fetched_pods.resources
+          }}
+
+    - name: Display Audit Scope
+      debug:
+        msg: "Analisando {{ audit_scope_pods | length }} Pods no escopo: {{ target_namespace }}"
+
+    # -----------------------------------------------------------------------
+    # BLOCO DE AUDITORIA
+    # -----------------------------------------------------------------------
+
+    - name: 3. Verificar Security Context (Privileged)
+      set_fact:
+        audit_privileged: "{{ audit_privileged | default([]) + [item.metadata.namespace ~ '/' ~ item.metadata.name] }}"
+      loop: "{{ audit_scope_pods }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - item.spec.containers | selectattr('securityContext.privileged', 'defined') | selectattr('securityContext.privileged', 'equalto', true) | list | length > 0
+
+    - name: 4. Verificar HostPath (Montagem de Disco do Host)
+      set_fact:
+        audit_hostpath: "{{ audit_hostpath | default([]) + [item.metadata.namespace ~ '/' ~ item.metadata.name] }}"
+      loop: "{{ audit_scope_pods }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - item.spec.volumes is defined
+        - item.spec.volumes | selectattr('hostPath', 'defined') | list | length > 0
+
+    - name: 5. Verificar Probes Ausentes (Liveness/Readiness)
+      set_fact:
+        audit_probes: "{{ audit_probes | default([]) + [item.metadata.namespace ~ '/' ~ item.metadata.name] }}"
+      loop: "{{ audit_scope_pods }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - item.spec.containers | selectattr('livenessProbe', 'undefined') | list | length > 0 or
+          item.spec.containers | selectattr('readinessProbe', 'undefined') | list | length > 0
+
+    - name: 6. Verificar Imagens com tag ':latest'
+      set_fact:
+        audit_latest: "{{ audit_latest | default([]) + [item.metadata.namespace ~ '/' ~ item.metadata.name] }}"
+      loop: "{{ audit_scope_pods }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - item.spec.containers | selectattr('image', 'search', ':latest$') | list | length > 0 or
+          item.spec.containers | rejectattr('image', 'search', ':') | list | length > 0
+
+    - name: 7. Verificar Requests/Limits Ausentes
+      set_fact:
+        audit_limits: "{{ audit_limits | default([]) + [item.metadata.namespace ~ '/' ~ item.metadata.name] }}"
+      loop: "{{ audit_scope_pods }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - item.spec.containers | selectattr('resources.limits', 'undefined') | list | length > 0 or
+          item.spec.containers | selectattr('resources.requests', 'undefined') | list | length > 0
+
+    # -----------------------------------------------------------------------
+    # RELATÓRIO FINAL (Console Friendly)
+    # -----------------------------------------------------------------------
+    - name: 📊 RELATÓRIO: SECURITY AUDIT CNFs
+      debug:
+        msg:
+          - "############################################################"
+          - "              RESULTADO DA AUDITORIA: {{ target_namespace | upper }} "
+          - "############################################################"
+          - " "
+          - "🚨 [CRÍTICO] Containers Privilegiados: {{ audit_privileged | default([]) | length }}"
+          - "{{ audit_privileged | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
+          - " "
+          - "⛔ [ALTO] Uso de HostPath (Volume Físico): {{ audit_hostpath | default([]) | length }}"
+          - "{{ audit_hostpath | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
+          - " "
+          - "⚠️ [MÉDIO] Imagens com tag ':latest': {{ audit_latest | default([]) | length }}"
+          - "{{ audit_latest | default(['   -> Nenhuma (OK)']) | to_nice_yaml }}"
+          - " "
+          - "📉 [BAIXO] Sem Probes (Liveness/Readiness): {{ audit_probes | default([]) | length }}"
+          - "{{ audit_probes | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
+          - " "
+          - "🐌 [BAIXO] Sem Limites de Recursos (QoS): {{ audit_limits | default([]) | length }}"
+          - "{{ audit_limits | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
+          - "############################################################"
