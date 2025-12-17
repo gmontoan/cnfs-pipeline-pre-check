@@ -90,10 +90,10 @@
         - item.spec.containers | selectattr('resources.limits', 'undefined') | list | length > 0 or
           item.spec.containers | selectattr('resources.requests', 'undefined') | list | length > 0
 
-    # -----------------------------------------------------------------------
+ # -----------------------------------------------------------------------
     # RELATÓRIO FINAL (Console Friendly)
     # -----------------------------------------------------------------------
-    - name: 📊 RELATÓRIO: SECURITY AUDIT CNFs
+    - name: "📊 RELATÓRIO: SECURITY AUDIT CNFs"
       debug:
         msg:
           - "############################################################"
