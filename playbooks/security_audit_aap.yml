@@ -91,28 +91,38 @@
           item.spec.containers | selectattr('resources.requests', 'undefined') | list | length > 0
 
 # -----------------------------------------------------------------------
-    # RELATÓRIO FINAL (CLEAN VERSION)
+    # RELATÓRIO FINAL (FORMATO LISTA PLANA - BEST FOR AAP)
     # -----------------------------------------------------------------------
-    - name: "📊 RELATÓRIO: SECURITY AUDIT CNFs"
+    - name: "📊 RELATÓRIO DE AUDITORIA"
       debug:
-        msg: |
-          ############################################################
-                        RESULTADO DA AUDITORIA: {{ target_namespace | upper }}
-          ############################################################
-
-          🚨 [CRÍTICO] Containers Privilegiados: {{ audit_privileged | default([]) | length }}
-          {{ audit_privileged | default([]) | to_nice_yaml if (audit_privileged | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
-
-          ⛔ [ALTO] Uso de HostPath (Volume Físico): {{ audit_hostpath | default([]) | length }}
-          {{ audit_hostpath | default([]) | to_nice_yaml if (audit_hostpath | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
-
-          ⚠️ [MÉDIO] Imagens com tag ':latest': {{ audit_latest | default([]) | length }}
-          {{ audit_latest | default([]) | to_nice_yaml if (audit_latest | default([]) | length > 0) else '   -> ✅ Nenhuma encontrada (OK)' }}
-
-          📉 [BAIXO] Sem Probes (Liveness/Readiness): {{ audit_probes | default([]) | length }}
-          {{ audit_probes | default([]) | to_nice_yaml if (audit_probes | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
-
-          🐌 [BAIXO] Sem Limites de Recursos (QoS): {{ audit_limits | default([]) | length }}
-          {{ audit_limits | default([]) | to_nice_yaml if (audit_limits | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
-          
-          ############################################################
+        msg: >-
+          {{
+            [
+              '############################################################',
+              '              RESULTADO: ' ~ (target_namespace | upper),
+              '############################################################',
+              ' '
+            ]
+            +
+            [ '🚨 [CRÍTICO] Containers Privilegiados: ' ~ (audit_privileged | default([]) | length) ]
+            +
+            (audit_privileged | default([]) if (audit_privileged | default([]) | length > 0) else ['   ✅ OK (Nenhum)'])
+            +
+            [ ' ', '⛔ [ALTO] Uso de HostPath: ' ~ (audit_hostpath | default([]) | length) ]
+            +
+            (audit_hostpath | default([]) if (audit_hostpath | default([]) | length > 0) else ['   ✅ OK (Nenhum)'])
+            +
+            [ ' ', '⚠️ [MÉDIO] Imagens tag :latest: ' ~ (audit_latest | default([]) | length) ]
+            +
+            (audit_latest | default([]) if (audit_latest | default([]) | length > 0) else ['   ✅ OK (Nenhuma)'])
+            +
+            [ ' ', '📉 [BAIXO] Sem Probes: ' ~ (audit_probes | default([]) | length) ]
+            +
+            (audit_probes | default([]) if (audit_probes | default([]) | length > 0) else ['   ✅ OK (Nenhum)'])
+            +
+            [ ' ', '🐌 [BAIXO] Sem QoS Limits: ' ~ (audit_limits | default([]) | length) ]
+            +
+            (audit_limits | default([]) if (audit_limits | default([]) | length > 0) else ['   ✅ OK (Nenhum)'])
+            +
+            [ ' ', '############################################################' ]
+          }}
