@@ -1,17 +1,16 @@
 ---
-- name: AAP OpenShift Security Audit (Modular Display)
+- name: AAP OpenShift Security Audit (Final Fix)
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    # INPUT do Survey
     target_namespace: "all"
     system_namespaces_regex: "^(openshift-|kube-|default$|logging$|monitoring$)"
 
   tasks:
     # ==============================================================================
-    # FASE 1: COLETA (Igual)
+    # FASE 1: COLETA
     # ==============================================================================
     - name: 1. Coletar Pods
       kubernetes.core.k8s_info:
@@ -32,7 +31,7 @@
           }}
 
     # ==============================================================================
-    # FASE 2: CÁLCULO (Igual - Loop Robusto)
+    # FASE 2: CÁLCULO (LOOP)
     # ==============================================================================
     - name: 3. Inicializar Variáveis
       set_fact:
@@ -54,9 +53,8 @@
         label: "Checking {{ item.metadata.name }}"
 
     # ==============================================================================
-    # FASE 3: EXIBIÇÃO MODULAR (AQUI ESTÁ A CORREÇÃO)
+    # FASE 3: EXIBIÇÃO MODULAR (CORRIGIDA COM | int)
     # ==============================================================================
-    # Cada check agora é uma Task separada. O AAP vai mostrar um bloco para cada um.
     
     - name: "CABEÇALHO DO RELATÓRIO"
       debug:
@@ -71,7 +69,8 @@
         msg: "{{ title + content }}"
       vars:
         count: "{{ v_privileged | length }}"
-        is_nok: "{{ count > 0 }}"
+        # CORREÇÃO AQUI: Adicionado '| int' para garantir que é numero
+        is_nok: "{{ count | int > 0 }}"
         title: 
           - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
         content: "{{ v_privileged if is_nok else ['   -> ✅ Nenhum container privilegiado (OK).'] }}"
@@ -82,7 +81,7 @@
         msg: "{{ title + content }}"
       vars:
         count: "{{ v_hostpath | length }}"
-        is_nok: "{{ count > 0 }}"
+        is_nok: "{{ count | int > 0 }}"
         title: 
           - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
         content: "{{ v_hostpath if is_nok else ['   -> ✅ Nenhum HostPath detectado (OK).'] }}"
@@ -93,7 +92,7 @@
         msg: "{{ title + content }}"
       vars:
         count: "{{ v_latest | length }}"
-        is_nok: "{{ count > 0 }}"
+        is_nok: "{{ count | int > 0 }}"
         title: 
           - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
         content: "{{ v_latest if is_nok else ['   -> ✅ Todas as imagens versionadas (OK).'] }}"
@@ -104,7 +103,7 @@
         msg: "{{ title + content }}"
       vars:
         count: "{{ v_probes | length }}"
-        is_nok: "{{ count > 0 }}"
+        is_nok: "{{ count | int > 0 }}"
         title: 
           - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
         content: "{{ v_probes if is_nok else ['   -> ✅ Todos os pods possuem Probes (OK).'] }}"
@@ -115,7 +114,7 @@
         msg: "{{ title + content }}"
       vars:
         count: "{{ v_limits | length }}"
-        is_nok: "{{ count > 0 }}"
+        is_nok: "{{ count | int > 0 }}"
         title: 
           - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
         content: "{{ v_limits if is_nok else ['   -> ✅ Todos os pods possuem limites (OK).'] }}"
