@@ -90,28 +90,29 @@
         - item.spec.containers | selectattr('resources.limits', 'undefined') | list | length > 0 or
           item.spec.containers | selectattr('resources.requests', 'undefined') | list | length > 0
 
- # -----------------------------------------------------------------------
-    # RELATÓRIO FINAL (Console Friendly)
+# -----------------------------------------------------------------------
+    # RELATÓRIO FINAL (CLEAN VERSION)
     # -----------------------------------------------------------------------
     - name: "📊 RELATÓRIO: SECURITY AUDIT CNFs"
       debug:
-        msg:
-          - "############################################################"
-          - "              RESULTADO DA AUDITORIA: {{ target_namespace | upper }} "
-          - "############################################################"
-          - " "
-          - "🚨 [CRÍTICO] Containers Privilegiados: {{ audit_privileged | default([]) | length }}"
-          - "{{ audit_privileged | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
-          - " "
-          - "⛔ [ALTO] Uso de HostPath (Volume Físico): {{ audit_hostpath | default([]) | length }}"
-          - "{{ audit_hostpath | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
-          - " "
-          - "⚠️ [MÉDIO] Imagens com tag ':latest': {{ audit_latest | default([]) | length }}"
-          - "{{ audit_latest | default(['   -> Nenhuma (OK)']) | to_nice_yaml }}"
-          - " "
-          - "📉 [BAIXO] Sem Probes (Liveness/Readiness): {{ audit_probes | default([]) | length }}"
-          - "{{ audit_probes | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
-          - " "
-          - "🐌 [BAIXO] Sem Limites de Recursos (QoS): {{ audit_limits | default([]) | length }}"
-          - "{{ audit_limits | default(['   -> Nenhum (OK)']) | to_nice_yaml }}"
-          - "############################################################"
+        msg: |
+          ############################################################
+                        RESULTADO DA AUDITORIA: {{ target_namespace | upper }}
+          ############################################################
+
+          🚨 [CRÍTICO] Containers Privilegiados: {{ audit_privileged | default([]) | length }}
+          {{ audit_privileged | default([]) | to_nice_yaml if (audit_privileged | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
+
+          ⛔ [ALTO] Uso de HostPath (Volume Físico): {{ audit_hostpath | default([]) | length }}
+          {{ audit_hostpath | default([]) | to_nice_yaml if (audit_hostpath | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
+
+          ⚠️ [MÉDIO] Imagens com tag ':latest': {{ audit_latest | default([]) | length }}
+          {{ audit_latest | default([]) | to_nice_yaml if (audit_latest | default([]) | length > 0) else '   -> ✅ Nenhuma encontrada (OK)' }}
+
+          📉 [BAIXO] Sem Probes (Liveness/Readiness): {{ audit_probes | default([]) | length }}
+          {{ audit_probes | default([]) | to_nice_yaml if (audit_probes | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
+
+          🐌 [BAIXO] Sem Limites de Recursos (QoS): {{ audit_limits | default([]) | length }}
+          {{ audit_limits | default([]) | to_nice_yaml if (audit_limits | default([]) | length > 0) else '   -> ✅ Nenhum encontrado (OK)' }}
+          
+          ############################################################
