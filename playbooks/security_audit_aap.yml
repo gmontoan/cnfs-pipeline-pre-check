@@ -1,18 +1,17 @@
 ---
-- name: AAP OpenShift Security Audit (Stable Version)
+- name: AAP OpenShift Security Audit (Modular Display)
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    # INPUT: Variavel que vem do Survey do AAP
+    # INPUT do Survey
     target_namespace: "all"
-    # Regex para ignorar namespaces de sistema
     system_namespaces_regex: "^(openshift-|kube-|default$|logging$|monitoring$)"
 
   tasks:
     # ==============================================================================
-    # FASE 1: COLETA DE DADOS
+    # FASE 1: COLETA (Igual)
     # ==============================================================================
     - name: 1. Coletar Pods
       kubernetes.core.k8s_info:
@@ -33,10 +32,9 @@
           }}
 
     # ==============================================================================
-    # FASE 2: AUDITORIA (MÉTODO LOOP SEGURO)
+    # FASE 2: CÁLCULO (Igual - Loop Robusto)
     # ==============================================================================
-    
-    - name: 3. Inicializar Listas de Violação (Reset)
+    - name: 3. Inicializar Variáveis
       set_fact:
         v_privileged: []
         v_hostpath: []
@@ -44,91 +42,84 @@
         v_probes: []
         v_limits: []
 
-    - name: 4. Executar Auditoria (Iterando sobre os Pods)
+    - name: 4. Processar Auditoria
       set_fact:
-        # Verifica Privilegiados
         v_privileged: "{{ v_privileged + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('securityContext.privileged', 'defined') | selectattr('securityContext.privileged', 'equalto', true) | list | length > 0) else []) }}"
-        
-        # Verifica HostPath
         v_hostpath:   "{{ v_hostpath   + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.volumes is defined and item.spec.volumes | selectattr('hostPath', 'defined') | list | length > 0) else []) }}"
-        
-        # Verifica Tag Latest
         v_latest:     "{{ v_latest     + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('image', 'search', ':latest$') | list | length > 0 or item.spec.containers | rejectattr('image', 'search', ':') | list | length > 0) else []) }}"
-        
-        # Verifica Probes
         v_probes:     "{{ v_probes     + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('livenessProbe', 'undefined') | list | length > 0 or item.spec.containers | selectattr('readinessProbe', 'undefined') | list | length > 0) else []) }}"
-        
-        # Verifica Limits
         v_limits:     "{{ v_limits     + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('resources.limits', 'undefined') | list | length > 0) else []) }}"
-      
       loop: "{{ audit_scope_pods }}"
       loop_control:
-        label: "Auditando {{ item.metadata.name }}"
+        label: "Checking {{ item.metadata.name }}"
 
     # ==============================================================================
-    # FASE 3: CONSTRUÇÃO DO RELATÓRIO
+    # FASE 3: EXIBIÇÃO MODULAR (AQUI ESTÁ A CORREÇÃO)
     # ==============================================================================
+    # Cada check agora é uma Task separada. O AAP vai mostrar um bloco para cada um.
     
-    - name: Montar Cabeçalho
-      set_fact:
-        final_report:
-          - "############################################################"
-          - "              RELATÓRIO DE AUDITORIA: {{ target_namespace | upper }}"
-          - "############################################################"
-          - " "
-
-    - name: Adicionar Seção Privileged
-      set_fact:
-        final_report: "{{ final_report + section_header + section_list + [' '] }}"
-      vars:
-        is_nok: "{{ v_privileged | length > 0 }}"
-        section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Containers Privilegiados: {{ v_privileged | length }} encontrado(s)"
-        section_list: "{{ v_privileged if is_nok else ['   -> Nenhum container privilegiado detectado.'] }}"
-
-    - name: Adicionar Seção HostPath
-      set_fact:
-        final_report: "{{ final_report + section_header + section_list + [' '] }}"
-      vars:
-        is_nok: "{{ v_hostpath | length > 0 }}"
-        section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Volumes HostPath: {{ v_hostpath | length }} encontrado(s)"
-        section_list: "{{ v_hostpath if is_nok else ['   -> Nenhum volume HostPath detectado.'] }}"
-
-    - name: Adicionar Seção Latest Tag
-      set_fact:
-        final_report: "{{ final_report + section_header + section_list + [' '] }}"
-      vars:
-        is_nok: "{{ v_latest | length > 0 }}"
-        section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Imagens tag ':latest': {{ v_latest | length }} encontrado(s)"
-        section_list: "{{ v_latest if is_nok else ['   -> Todas as imagens estão versionadas.'] }}"
-
-    - name: Adicionar Seção Probes
-      set_fact:
-        final_report: "{{ final_report + section_header + section_list + [' '] }}"
-      vars:
-        is_nok: "{{ v_probes | length > 0 }}"
-        section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Pods sem Probes: {{ v_probes | length }} encontrado(s)"
-        section_list: "{{ v_probes if is_nok else ['   -> Todos os pods têm verificação de saúde.'] }}"
-
-    - name: Adicionar Seção Limits
-      set_fact:
-        final_report: "{{ final_report + section_header + section_list + [' '] }}"
-      vars:
-        is_nok: "{{ v_limits | length > 0 }}"
-        section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Pods sem Resource Limits: {{ v_limits | length }} encontrado(s)"
-        section_list: "{{ v_limits if is_nok else ['   -> Todos os pods têm limites de recursos definidos.'] }}"
-
-    - name: Finalizar Relatório
-      set_fact:
-        final_report: "{{ final_report + ['############################################################'] }}"
-
-    # ==============================================================================
-    # FASE 4: EXIBIÇÃO
-    # ==============================================================================
-    - name: "📋 EXIBIR RELATÓRIO COMPLETO"
+    - name: "CABEÇALHO DO RELATÓRIO"
       debug:
-        msg: "{{ final_report }}"
+        msg: 
+          - "############################################################"
+          - "              AUDITORIA: {{ target_namespace | upper }}"
+          - "############################################################"
+
+    # --- BLOCO 1: PRIVILEGED ---
+    - name: "RESULTADO [1/5]: Containers Privilegiados"
+      debug:
+        msg: "{{ title + content }}"
+      vars:
+        count: "{{ v_privileged | length }}"
+        is_nok: "{{ count > 0 }}"
+        title: 
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
+        content: "{{ v_privileged if is_nok else ['   -> ✅ Nenhum container privilegiado (OK).'] }}"
+
+    # --- BLOCO 2: HOSTPATH ---
+    - name: "RESULTADO [2/5]: Volumes HostPath"
+      debug:
+        msg: "{{ title + content }}"
+      vars:
+        count: "{{ v_hostpath | length }}"
+        is_nok: "{{ count > 0 }}"
+        title: 
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
+        content: "{{ v_hostpath if is_nok else ['   -> ✅ Nenhum HostPath detectado (OK).'] }}"
+
+    # --- BLOCO 3: IMAGEM LATEST ---
+    - name: "RESULTADO [3/5]: Imagens Tag ':latest'"
+      debug:
+        msg: "{{ title + content }}"
+      vars:
+        count: "{{ v_latest | length }}"
+        is_nok: "{{ count > 0 }}"
+        title: 
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
+        content: "{{ v_latest if is_nok else ['   -> ✅ Todas as imagens versionadas (OK).'] }}"
+
+    # --- BLOCO 4: PROBES ---
+    - name: "RESULTADO [4/5]: Health Probes Ausentes"
+      debug:
+        msg: "{{ title + content }}"
+      vars:
+        count: "{{ v_probes | length }}"
+        is_nok: "{{ count > 0 }}"
+        title: 
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
+        content: "{{ v_probes if is_nok else ['   -> ✅ Todos os pods possuem Probes (OK).'] }}"
+
+    # --- BLOCO 5: LIMITS ---
+    - name: "RESULTADO [5/5]: Resource Limits Ausentes"
+      debug:
+        msg: "{{ title + content }}"
+      vars:
+        count: "{{ v_limits | length }}"
+        is_nok: "{{ count > 0 }}"
+        title: 
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Violations: {{ count }}"
+        content: "{{ v_limits if is_nok else ['   -> ✅ Todos os pods possuem limites (OK).'] }}"
+
+    - name: "FIM DO RELATÓRIO"
+      debug:
+        msg: "############################################################"
