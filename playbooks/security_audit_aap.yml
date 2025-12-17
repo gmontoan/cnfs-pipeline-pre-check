@@ -1,5 +1,5 @@
 ---
-- name: AAP OpenShift Security Audit (NOK/OK Report)
+- name: AAP OpenShift Security Audit (Stable Version)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -7,20 +7,21 @@
   vars:
     # INPUT: Variavel que vem do Survey do AAP
     target_namespace: "all"
+    # Regex para ignorar namespaces de sistema
     system_namespaces_regex: "^(openshift-|kube-|default$|logging$|monitoring$)"
 
   tasks:
     # ==============================================================================
     # FASE 1: COLETA DE DADOS
     # ==============================================================================
-    - name: 1. Coletar Pods (Otimizado)
+    - name: 1. Coletar Pods
       kubernetes.core.k8s_info:
         kind: Pod
         api_version: v1
         namespace: "{{ target_namespace if target_namespace != 'all' else omit }}"
       register: fetched_pods
 
-    - name: 2. Definir Escopo (Filtrar Sistema)
+    - name: 2. Filtrar Escopo
       set_fact:
         audit_scope_pods: >-
           {{
@@ -32,40 +33,10 @@
           }}
 
     # ==============================================================================
-    # FASE 2: VERIFICAÇÕES (Gera listas de violacoes)
+    # FASE 2: AUDITORIA (MÉTODO LOOP SEGURO)
     # ==============================================================================
-    - name: 3. Check - Containers Privilegiados
-      set_fact:
-        # Cria uma lista de strings: "namespace/pod"
-        violators_privileged: >-
-          {{
-            audit_scope_pods 
-            | selectattr('spec.containers', 'defined')
-            | map(attribute='spec.containers')
-            | flatten
-            | selectattr('securityContext.privileged', 'defined')
-            | selectattr('securityContext.privileged', 'equalto', true)
-            | map('image') 
-            | list
-            | length > 0 
-            | ternary(
-                audit_scope_pods 
-                | selectattr('spec.containers', 'defined') 
-                | select('json_query', "spec.containers[?securityContext.privileged==`true`]") 
-                | map(attribute='metadata') 
-                | map('json_query', "{ns: namespace, name: name}") 
-                | map('join', '/') 
-                | list, 
-                []
-              )
-          }}
-      # Nota: A logica acima usa json_query/select complexo para garantir precisão, 
-      # mas para simplificar e garantir que nada quebre, vou usar a logica de loop anterior que era mais robusta.
-      # Vamos reverter para o loop set_fact que é infalível.
-
-    # --- RESET DA ABORDAGEM DE LOOP (Mais seguro contra erros de Jinja) ---
     
-    - name: Reset das variaveis de violacao
+    - name: 3. Inicializar Listas de Violação (Reset)
       set_fact:
         v_privileged: []
         v_hostpath: []
@@ -73,22 +44,32 @@
         v_probes: []
         v_limits: []
 
-    - name: 3.1 Loop de Auditoria (Processa tudo de uma vez)
+    - name: 4. Executar Auditoria (Iterando sobre os Pods)
       set_fact:
+        # Verifica Privilegiados
         v_privileged: "{{ v_privileged + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('securityContext.privileged', 'defined') | selectattr('securityContext.privileged', 'equalto', true) | list | length > 0) else []) }}"
+        
+        # Verifica HostPath
         v_hostpath:   "{{ v_hostpath   + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.volumes is defined and item.spec.volumes | selectattr('hostPath', 'defined') | list | length > 0) else []) }}"
+        
+        # Verifica Tag Latest
         v_latest:     "{{ v_latest     + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('image', 'search', ':latest$') | list | length > 0 or item.spec.containers | rejectattr('image', 'search', ':') | list | length > 0) else []) }}"
+        
+        # Verifica Probes
         v_probes:     "{{ v_probes     + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('livenessProbe', 'undefined') | list | length > 0 or item.spec.containers | selectattr('readinessProbe', 'undefined') | list | length > 0) else []) }}"
+        
+        # Verifica Limits
         v_limits:     "{{ v_limits     + ([item.metadata.namespace ~ '/' ~ item.metadata.name] if (item.spec.containers | selectattr('resources.limits', 'undefined') | list | length > 0) else []) }}"
+      
       loop: "{{ audit_scope_pods }}"
       loop_control:
         label: "Auditando {{ item.metadata.name }}"
 
     # ==============================================================================
-    # FASE 3: CONSTRUÇÃO DO RELATÓRIO (Monta a lista final)
+    # FASE 3: CONSTRUÇÃO DO RELATÓRIO
     # ==============================================================================
     
-    - name: Construir Cabeçalho
+    - name: Montar Cabeçalho
       set_fact:
         final_report:
           - "############################################################"
@@ -111,7 +92,7 @@
       vars:
         is_nok: "{{ v_hostpath | length > 0 }}"
         section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Volumes HostPath (Risco Alto): {{ v_hostpath | length }} encontrado(s)"
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Volumes HostPath: {{ v_hostpath | length }} encontrado(s)"
         section_list: "{{ v_hostpath if is_nok else ['   -> Nenhum volume HostPath detectado.'] }}"
 
     - name: Adicionar Seção Latest Tag
@@ -120,7 +101,7 @@
       vars:
         is_nok: "{{ v_latest | length > 0 }}"
         section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Imagens com tag ':latest': {{ v_latest | length }} encontrado(s)"
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Imagens tag ':latest': {{ v_latest | length }} encontrado(s)"
         section_list: "{{ v_latest if is_nok else ['   -> Todas as imagens estão versionadas.'] }}"
 
     - name: Adicionar Seção Probes
@@ -129,10 +110,10 @@
       vars:
         is_nok: "{{ v_probes | length > 0 }}"
         section_header: 
-          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Pods sem Probes (Saúde): {{ v_probes | length }} encontrado(s)"
+          - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Pods sem Probes: {{ v_probes | length }} encontrado(s)"
         section_list: "{{ v_probes if is_nok else ['   -> Todos os pods têm verificação de saúde.'] }}"
 
-    - name: Adicionar Seção Limits (QoS)
+    - name: Adicionar Seção Limits
       set_fact:
         final_report: "{{ final_report + section_header + section_list + [' '] }}"
       vars:
@@ -141,7 +122,7 @@
           - "{{ '🔴 NOK' if is_nok else '🟢 OK' }} - Pods sem Resource Limits: {{ v_limits | length }} encontrado(s)"
         section_list: "{{ v_limits if is_nok else ['   -> Todos os pods têm limites de recursos definidos.'] }}"
 
-    - name: Finalizar Rodapé
+    - name: Finalizar Relatório
       set_fact:
         final_report: "{{ final_report + ['############################################################'] }}"
 
