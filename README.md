@@ -59,29 +59,23 @@ ansible-navigator config dump
 ansible-navigator collections --mode=interactive
 ```
 
-## Using Ansible Automation Platform (AAP)
+Com base no guia Red Hat Best Practices for Kubernetes foi desenvolvido um playbook de auditoria de segurança.
 
-TODO: Create a playbook to create objects in AAP!
+Este guia enfatiza fortemente a segurança dos workloads (Pods), evitando privilégios excessivos, montagens de host e garantindo a saúde da aplicação (Probes) e governança de recursos.
 
-- Create a new **Project** pointing to the Ansible Project version control repo
-- Create a new **Inventory**
-- Create a new **Inventory Source** in the new Inventory object you created
-  - Select "Source from a Project"
-  - Select the Project you created
-  - Select the **inventory** file as the source
-- Synchronize the Inventory Source to make sure it succeeds
-- Notice now that your Inventory object contains the vars and hosts and groups from the inventory structure
-- Notice it loaded the variables from within the `group_vars` folder as well!
-- Create a new **Job Template**
-  - Set the name
-  - Set the Project
-  - Set the Playbook
-  - Set the Credentials
+O que este Playbook Audita?
+Baseado nos capítulos 2.12 (Pod Security), 3.5 (Workload Security), 3.6 (Capabilities) e 3.12 (Cloud-native design):
 
-## License
+Privileged Containers: Pods rodando com privileged: true (Violação Crítica).
 
-GNUv3
+HostPath Volumes: Pods montando diretórios do nó host (Violação de Isolamento).
 
-## Author
+Capabilities Perigosas: Uso de SYS_ADMIN, NET_ADMIN, etc.
 
-John Wadleigh
+Imagens inseguras: Uso da tag :latest (Violação de Imutabilidade).
+
+Falta de Probes: Pods sem Liveness/Readiness probes configurados.
+
+Falta de Limites: Pods sem Requests/Limits de CPU e Memória (Risco de DoS).
+
+Network Policies: Namespaces sem políticas de rede (Isolamento de Rede).
