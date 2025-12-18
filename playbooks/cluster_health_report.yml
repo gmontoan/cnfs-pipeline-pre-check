@@ -1,5 +1,5 @@
 ---
-- name: Relatório Avançado: Capacidade, Rede e Performance Tuning
+- name: "Relatório Avançado: Capacidade, Rede e Performance Tuning"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -22,20 +22,20 @@
     # ==============================================================================
     # FASE 1: COLETA DE DADOS (Infraestrutura)
     # ==============================================================================
-    - name: 1.1 Buscar Nodes
+    - name: "1.1 Buscar Nodes"
       kubernetes.core.k8s_info:
         kind: Node
         api_version: v1
       register: node_list
 
-    - name: 1.2 Buscar Configuração de Rede (CNI)
+    - name: "1.2 Buscar Configuração de Rede (CNI)"
       kubernetes.core.k8s_info:
         api_version: config.openshift.io/v1
         kind: Network
         name: cluster
       register: net_config
 
-    - name: 1.3 Buscar Políticas SR-IOV
+    - name: "1.3 Buscar Políticas SR-IOV"
       kubernetes.core.k8s_info:
         api_version: sriovnetwork.openshift.io/v1
         kind: SriovNetworkNodePolicy
@@ -43,7 +43,7 @@
       register: sriov_policies
       ignore_errors: true
 
-    - name: 1.4 Buscar Perfis de Performance (Node Tuning Operator)
+    - name: "1.4 Buscar Perfis de Performance (Node Tuning Operator)"
       kubernetes.core.k8s_info:
         api_version: performance.openshift.io/v2
         kind: PerformanceProfile
@@ -53,7 +53,7 @@
     # ==============================================================================
     # FASE 2: CÁLCULO DE RECURSOS E TUNING
     # ==============================================================================
-    - name: 2. Processar Soma de Recursos (Incluindo HugePages)
+    - name: "2. Processar Soma de Recursos (Incluindo HugePages)"
       set_fact:
         cluster_stats:
           # --- CPU e Memória (Padrão) ---
