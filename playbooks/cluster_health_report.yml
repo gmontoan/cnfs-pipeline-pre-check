@@ -20,7 +20,7 @@
 
   tasks:
     # ==============================================================================
-    # FASE 1: COLETA DE DADOS (Infraestrutura)
+    # FASE 1: COLETA DE DADOS
     # ==============================================================================
     - name: "1.1 Buscar Nodes"
       kubernetes.core.k8s_info:
@@ -43,7 +43,7 @@
       register: sriov_policies
       ignore_errors: true
 
-    - name: "1.4 Buscar Perfis de Performance (Node Tuning Operator)"
+    - name: "1.4 Buscar Perfis de Performance"
       kubernetes.core.k8s_info:
         api_version: performance.openshift.io/v2
         kind: PerformanceProfile
@@ -51,24 +51,132 @@
       ignore_errors: true
 
     # ==============================================================================
-    # FASE 2: CÁLCULO DE RECURSOS E TUNING
+    # FASE 2: CÁLCULO (Usando Block Scalar '>' para evitar erros de linha longa)
     # ==============================================================================
-    - name: "2. Processar Soma de Recursos (Incluindo HugePages)"
+    - name: "2. Processar Soma de Recursos"
       set_fact:
         cluster_stats:
-          # --- CPU e Memória (Padrão) ---
-          cpu_cap:   "{{ cluster_stats.cpu_cap   | float + (item.status.capacity.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.capacity.cpu else item.status.capacity.cpu | float) }}"
-          cpu_alloc: "{{ cluster_stats.cpu_alloc | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}"
-          mem_cap:   "{{ cluster_stats.mem_cap   | float + (item.status.capacity.memory | regex_replace('Ki','') | float * 1024) }}"
-          mem_alloc: "{{ cluster_stats.mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}"
+          # --- CPU (milli to vCore) ---
+          cpu_cap: >-
+            {{ cluster_stats.cpu_cap | float + (item.status.capacity.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.capacity.cpu else item.status.capacity.cpu | float) }}
+          cpu_alloc: >-
+            {{ cluster_stats.cpu_alloc | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}
           
-          # --- DISCO (Ephemeral Storage) ---
-          disk_cap:  "{{ cluster_stats.disk_cap  | float + (item.status.capacity['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) }}"
-          # A CORREÇÃO ESTÁ NA LINHA ABAIXO (Adicionado espaço após disk_alloc:)
-          disk_alloc: "{{ cluster_stats.disk_alloc | float + (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) }}"
+          # --- MEMÓRIA (Ki to Bytes) ---
+          mem_cap: >-
+            {{ cluster_stats.mem_cap | float + (item.status.capacity.memory | regex_replace('Ki','') | float * 1024) }}
+          mem_alloc: >-
+            {{ cluster_stats.mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
           
-          # --- PERFORMANCE TUNING: HugePages (1Gi e 2Mi) ---
-          hugepages_total_1gi: "{{ cluster_stats.hugepages_total_1gi | float + (item.status.capacity['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}"
-          hugepages_free_1gi:  "{{ cluster_stats.hugepages_free_1gi  | float + (item.status.allocatable['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}"
-          hugepages_total_2mi: "{{ cluster_stats.hugepages_total_2mi | float + (item.status.capacity['hugepages-2Mi'] | default('0') | regex_replace('Ki','') | float * 1024) }}"
-          hugepages_free_2mi:  "{{ cluster_stats.hugepages_free_2mi  | float + (item.status.allocatable['hugepages-2Mi'] |
+          # --- DISCO (Ki to Bytes) ---
+          disk_cap: >-
+            {{ cluster_stats.disk_cap | float + (item.status.capacity['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) }}
+          disk_alloc: >-
+            {{ cluster_stats.disk_alloc | float + (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) }}
+          
+          # --- HUGEPAGES 1Gi ---
+          hugepages_total_1gi: >-
+            {{ cluster_stats.hugepages_total_1gi | float + (item.status.capacity['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
+          hugepages_free_1gi: >-
+            {{ cluster_stats.hugepages_free_1gi | float + (item.status.allocatable['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
+          
+          # --- HUGEPAGES 2Mi ---
+          hugepages_total_2mi: >-
+            {{ cluster_stats.hugepages_total_2mi | float + (item.status.capacity['hugepages-2Mi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
+          hugepages_free_2mi: >-
+            {{ cluster_stats.hugepages_free_2mi | float + (item.status.allocatable['hugepages-2Mi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
+
+      loop: "{{ node_list.resources }}"
+      loop_control:
+        label: "Node: {{ item.metadata.name }}"
+
+    # ==============================================================================
+    # FASE 3: EXIBIÇÃO
+    # ==============================================================================
+    
+    - name: "CABEÇALHO"
+      debug:
+        msg: 
+          - "############################################################"
+          - "      RELATÓRIO: CAPACIDADE & PERFORMANCE TUNING (RHBP)"
+          - "############################################################"
+
+    # --- BLOCO 1: COMPUTAÇÃO ---
+    - name: "📊 RELATÓRIO [1/4]: Computação"
+      debug:
+        msg:
+          - "------------------------------------------------------------"
+          - "CPU (vCores):"
+          - "  🔹 Capacity:    {{ cluster_stats.cpu_cap | float | round(1) }}"
+          - "  🔸 Allocatable: {{ cluster_stats.cpu_alloc | float | round(1) }}"
+          - " "
+          - "MEMÓRIA (RAM):"
+          - "  🔹 Capacity:    {{ (cluster_stats.mem_cap | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Allocatable: {{ (cluster_stats.mem_alloc | float / 1024**3) | round(2) }} GiB"
+          - "------------------------------------------------------------"
+
+    # --- BLOCO 2: ARMAZENAMENTO ---
+    - name: "💾 RELATÓRIO [2/4]: Armazenamento (Ephemeral)"
+      debug:
+        msg:
+          - "------------------------------------------------------------"
+          - "  🔹 Capacity:    {{ (cluster_stats.disk_cap | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Allocatable: {{ (cluster_stats.disk_alloc | float / 1024**3) | round(2) }} GiB"
+          - "------------------------------------------------------------"
+
+    # --- BLOCO 3: SR-IOV ---
+    - name: "🌐 RELATÓRIO [3/4]: Rede SR-IOV"
+      debug:
+        msg: "{{ header + sriov_info + footer }}"
+      vars:
+        has_sriov: "{{ sriov_policies.resources is defined and sriov_policies.resources | length > 0 }}"
+        header:
+          - "------------------------------------------------------------"
+          - "CNI Type: {{ net_config.resources[0].spec.networkType }}"
+          - " "
+          - "SR-IOV POLICIES:"
+        sriov_info: >-
+          {{
+            sriov_policies.resources 
+            | map(attribute='metadata.name') 
+            | map('regex_replace', '^', '  ⚡ Policy: ') 
+            | list
+            if has_sriov 
+            else ['  ⚠️  Nenhuma política SR-IOV ativa.']
+          }}
+        footer: ["------------------------------------------------------------"]
+
+    # --- BLOCO 4: PERFORMANCE TUNING ---
+    - name: "⚡ RELATÓRIO [4/4]: Tuning & HugePages"
+      debug:
+        msg: "{{ header + tuning_info + hugepages_info + footer }}"
+      vars:
+        has_profiles: "{{ perf_profiles.resources is defined and perf_profiles.resources | length > 0 }}"
+        
+        header:
+          - "------------------------------------------------------------"
+          - "PERFORMANCE PROFILES (CPU Pinning/NUMA):"
+        
+        tuning_info: >-
+          {{
+            perf_profiles.resources 
+            | json_query("[].{name: metadata.name, isolated: spec.cpu.isolated}")
+            | map('json_query', "join(' | Isolated CPUs: ', [name, isolated])")
+            | map('regex_replace', '^', '  🚀 Profile: ') 
+            | list
+            if has_profiles 
+            else ['  ⚠️  Nenhum PerformanceProfile aplicado.']
+          }}
+
+        hugepages_info:
+          - " "
+          - "HUGEPAGES (Memória Reservada):"
+          - "  📦 1Gi Pages Total: {{ (cluster_stats.hugepages_total_1gi | float / 1024**3) | round(0) }} GiB"
+          - "  📦 2Mi Pages Total: {{ (cluster_stats.hugepages_total_2mi | float / 1024**2) | round(0) }} MiB"
+        
+        footer:
+          - "------------------------------------------------------------"
+
+    - name: "FIM DO RELATÓRIO"
+      debug:
+        msg: "############################################################"
