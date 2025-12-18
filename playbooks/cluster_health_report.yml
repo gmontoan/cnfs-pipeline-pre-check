@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v10: Capacidade Real e Performance"
+- name: "Relatório v11: Capacidade Real (Type Fix)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -47,25 +47,24 @@
       failed_when: false
 
     # ==============================================================================
-    # FASE 2: CÁLCULO (Lógica Blindada de Unidades)
+    # FASE 2: CÁLCULO (Soma Incremental)
     # ==============================================================================
-    - name: "2.1 Processar Soma de Recursos (Correção de Unidades)"
+    - name: "2.1 Processar Soma de Recursos"
       set_fact:
         cluster_stats:
-          # CPU: Se tiver 'm' divide por 1000, senão usa float direto
+          # CPU
           cpu_cap: >-
             {{ cluster_stats.cpu_cap | float + (item.status.capacity.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.capacity.cpu else item.status.capacity.cpu | float) }}
           cpu_alloc: >-
             {{ cluster_stats.cpu_alloc | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}
           
-          # MEMÓRIA: Geralmente vem em Ki. Multiplica por 1024.
+          # MEMÓRIA
           mem_cap: >-
             {{ cluster_stats.mem_cap | float + (item.status.capacity.memory | regex_replace('Ki','') | float * 1024) }}
           mem_alloc: >-
             {{ cluster_stats.mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
           
-          # DISCO: AQUI ESTAVA O ERRO.
-          # Lógica: Se contem 'Ki', tira e multiplica. Se não (é bytes), usa direto.
+          # DISCO (Lógica Híbrida Ki/Bytes)
           disk_cap: >-
             {{ cluster_stats.disk_cap | float + (
                (item.status.capacity['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
@@ -79,7 +78,7 @@
                else item.status.allocatable['ephemeral-storage'] | float 
             ) }}
 
-          # HUGEPAGES (Padrão Ki)
+          # HUGEPAGES
           hugepages_total_1gi: >-
             {{ cluster_stats.hugepages_total_1gi | float + (item.status.capacity['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
           hugepages_total_2mi: >-
@@ -97,14 +96,14 @@
         label: "Profile: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # FASE 3: RELATÓRIO FINAL
+    # FASE 3: RELATÓRIO FINAL (CORREÇÃO DE TIPOS AQUI)
     # ==============================================================================
     
     - name: "CABEÇALHO"
       debug:
         msg: 
           - "############################################################"
-          - "           RELATÓRIO DE CAPACIDADE "
+          - "           RELATÓRIO DE CAPACIDADE (TYPE-SAFE)"
           - "############################################################"
 
     # --- BLOCO 1: COMPUTAÇÃO ---
@@ -115,22 +114,25 @@
           - "CPU (vCores):"
           - "  🔹 Total Físico (Capacity):    {{ cluster_stats.cpu_cap | float | round(1) }}"
           - "  🔸 Disponível Pods (Alloc):    {{ cluster_stats.cpu_alloc | float | round(1) }}"
-          - "  🔻 Reservado Sistema:          {{ (cluster_stats.cpu_cap - cluster_stats.cpu_alloc) | float | round(1) }}"
+          # CORREÇÃO ABAIXO: Adicionado | float em cada variável antes da subtração
+          - "  🔻 Reservado Sistema:          {{ (cluster_stats.cpu_cap | float - cluster_stats.cpu_alloc | float) | round(1) }}"
           - " "
           - "MEMÓRIA (RAM):"
           - "  🔹 Total Físico:      {{ (cluster_stats.mem_cap | float / 1024**3) | round(2) }} GiB"
           - "  🔸 Disponível Pods:   {{ (cluster_stats.mem_alloc | float / 1024**3) | round(2) }} GiB"
-          - "  🔻 Reservado Sistema: {{ ((cluster_stats.mem_cap - cluster_stats.mem_alloc) | float / 1024**3) | round(2) }} GiB"
+          # CORREÇÃO ABAIXO: Cast explícito antes do calculo
+          - "  🔻 Reservado Sistema: {{ ((cluster_stats.mem_cap | float - cluster_stats.mem_alloc | float) / 1024**3) | round(2) }} GiB"
           - "------------------------------------------------------------"
 
-    # --- BLOCO 2: ARMAZENAMENTO (CORRIGIDO) ---
+    # --- BLOCO 2: ARMAZENAMENTO ---
     - name: "💾 RELATÓRIO [2/4]: Armazenamento (Ephemeral)"
       debug:
         msg:
           - "------------------------------------------------------------"
           - "  🔹 Total Físico (Capacity):    {{ (cluster_stats.disk_cap | float / 1024**3) | round(2) }} GiB"
           - "  🔸 Disponível Pods (Alloc):    {{ (cluster_stats.disk_alloc | float / 1024**3) | round(2) }} GiB"
-          - "  🔻 Reservado Sistema (Logs/OS):{{ ((cluster_stats.disk_cap - cluster_stats.disk_alloc) | float / 1024**3) | round(2) }} GiB"
+          # CORREÇÃO ABAIXO: Cast explícito antes do calculo
+          - "  🔻 Reservado Sistema (Logs/OS):{{ ((cluster_stats.disk_cap | float - cluster_stats.disk_alloc | float) / 1024**3) | round(2) }} GiB"
           - "------------------------------------------------------------"
 
     # --- BLOCO 3: SR-IOV ---
