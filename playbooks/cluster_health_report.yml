@@ -16,7 +16,7 @@
       hugepages_free_1gi: 0
       hugepages_total_2mi: 0
       hugepages_free_2mi: 0
-    # Inicializa lista de perfis vazia para segurança
+    # Inicializa lista de perfis vazia
     formatted_profiles: []
 
   tasks:
@@ -52,7 +52,7 @@
       ignore_errors: true
 
     # ==============================================================================
-    # FASE 2: CÁLCULO DE RECURSOS (Matemática)
+    # FASE 2: CÁLCULO DE RECURSOS
     # ==============================================================================
     - name: "2.1 Processar Soma de Recursos"
       set_fact:
@@ -82,7 +82,7 @@
         label: "Node: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # FASE 2.2: PREPARAÇÃO DE TEXTO (Substituindo json_query)
+    # FASE 2.2: FORMATAÇÃO DE TEXTO (Sem dependências externas)
     # ==============================================================================
     - name: "2.2 Formatar Lista de Perfis de Performance"
       set_fact:
@@ -126,41 +126,4 @@
           - "  🔸 Allocatable: {{ (cluster_stats.disk_alloc | float / 1024**3) | round(2) }} GiB"
           - "------------------------------------------------------------"
 
-    # --- BLOCO 3: SR-IOV ---
-    - name: "🌐 RELATÓRIO [3/4]: Rede SR-IOV"
-      debug:
-        msg: "{{ header + sriov_info + footer }}"
-      vars:
-        has_sriov: "{{ sriov_policies.resources is defined and sriov_policies.resources | length > 0 }}"
-        header:
-          - "------------------------------------------------------------"
-          - "CNI Type: {{ net_config.resources[0].spec.networkType }}"
-          - " "
-          - "SR-IOV POLICIES:"
-        sriov_info: >-
-          {{
-            sriov_policies.resources 
-            | map(attribute='metadata.name') 
-            | map('regex_replace', '^', '  ⚡ Policy: ') 
-            | list
-            if has_sriov 
-            else ['  ⚠️  Nenhuma política SR-IOV ativa.']
-          }}
-        footer: ["------------------------------------------------------------"]
-
-    # --- BLOCO 4: PERFORMANCE TUNING ---
-    - name: "⚡ RELATÓRIO [4/4]: Tuning & HugePages"
-      debug:
-        msg: "{{ header + tuning_info + hugepages_info + footer }}"
-      vars:
-        has_profiles: "{{ formatted_profiles | length > 0 }}"
-        
-        header:
-          - "------------------------------------------------------------"
-          - "PERFORMANCE PROFILES (CPU Pinning/NUMA):"
-        
-        # Agora usamos a lista pré-calculada 'formatted_profiles'
-        tuning_info: >-
-          {{
-            formatted_profiles
-            if has_profiles
+    # --- BLOCO 3
