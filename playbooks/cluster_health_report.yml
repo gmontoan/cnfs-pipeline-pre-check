@@ -1,5 +1,5 @@
 ---
-- name: "Relatório Avançado: Capacidade, Rede e Performance Tuning"
+- name: "Relatório v10: Capacidade Real e Performance"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -16,12 +16,11 @@
       hugepages_free_1gi: 0
       hugepages_total_2mi: 0
       hugepages_free_2mi: 0
-    # Inicializa lista de perfis vazia
     formatted_profiles: []
 
   tasks:
     # ==============================================================================
-    # FASE 1: COLETA DE DADOS
+    # FASE 1: COLETA
     # ==============================================================================
     - name: "1.1 Buscar Nodes"
       kubernetes.core.k8s_info:
@@ -29,78 +28,83 @@
         api_version: v1
       register: node_list
 
-    - name: "1.2 Buscar Configuração de Rede (CNI)"
+    - name: "1.2 Buscar Configuração de Rede"
       kubernetes.core.k8s_info:
         api_version: config.openshift.io/v1
         kind: Network
         name: cluster
       register: net_config
 
-    - name: "1.3 Buscar Políticas SR-IOV"
+    - name: "1.3 Buscar SR-IOV e Perfis (Diagnostic Mode)"
       kubernetes.core.k8s_info:
-        api_version: sriovnetwork.openshift.io/v1
-        kind: SriovNetworkNodePolicy
-        namespace: openshift-sriov
-      register: sriov_policies
-      ignore_errors: true
-
-    - name: "1.4 Buscar Perfis de Performance"
-      kubernetes.core.k8s_info:
-        api_version: performance.openshift.io/v2
-        kind: PerformanceProfile
-      register: perf_profiles
-      ignore_errors: true
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ item.ns | default(omit) }}"
+      loop:
+        - { api: 'sriovnetwork.openshift.io/v1', kind: 'SriovNetworkNodePolicy', ns: 'openshift-sriov' }
+        - { api: 'performance.openshift.io/v2', kind: 'PerformanceProfile' }
+      register: k8s_extras
+      failed_when: false
 
     # ==============================================================================
-    # FASE 2: CÁLCULO DE RECURSOS
+    # FASE 2: CÁLCULO (Lógica Blindada de Unidades)
     # ==============================================================================
-    - name: "2.1 Processar Soma de Recursos"
+    - name: "2.1 Processar Soma de Recursos (Correção de Unidades)"
       set_fact:
         cluster_stats:
+          # CPU: Se tiver 'm' divide por 1000, senão usa float direto
           cpu_cap: >-
             {{ cluster_stats.cpu_cap | float + (item.status.capacity.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.capacity.cpu else item.status.capacity.cpu | float) }}
           cpu_alloc: >-
             {{ cluster_stats.cpu_alloc | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}
+          
+          # MEMÓRIA: Geralmente vem em Ki. Multiplica por 1024.
           mem_cap: >-
             {{ cluster_stats.mem_cap | float + (item.status.capacity.memory | regex_replace('Ki','') | float * 1024) }}
           mem_alloc: >-
             {{ cluster_stats.mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
+          
+          # DISCO: AQUI ESTAVA O ERRO.
+          # Lógica: Se contem 'Ki', tira e multiplica. Se não (é bytes), usa direto.
           disk_cap: >-
-            {{ cluster_stats.disk_cap | float + (item.status.capacity['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) }}
+            {{ cluster_stats.disk_cap | float + (
+               (item.status.capacity['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
+               if 'Ki' in item.status.capacity['ephemeral-storage'] 
+               else item.status.capacity['ephemeral-storage'] | float 
+            ) }}
           disk_alloc: >-
-            {{ cluster_stats.disk_alloc | float + (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) }}
+            {{ cluster_stats.disk_alloc | float + (
+               (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
+               if 'Ki' in item.status.allocatable['ephemeral-storage'] 
+               else item.status.allocatable['ephemeral-storage'] | float 
+            ) }}
+
+          # HUGEPAGES (Padrão Ki)
           hugepages_total_1gi: >-
             {{ cluster_stats.hugepages_total_1gi | float + (item.status.capacity['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
-          hugepages_free_1gi: >-
-            {{ cluster_stats.hugepages_free_1gi | float + (item.status.allocatable['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
           hugepages_total_2mi: >-
             {{ cluster_stats.hugepages_total_2mi | float + (item.status.capacity['hugepages-2Mi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
-          hugepages_free_2mi: >-
-            {{ cluster_stats.hugepages_free_2mi | float + (item.status.allocatable['hugepages-2Mi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
+
       loop: "{{ node_list.resources }}"
       loop_control:
         label: "Node: {{ item.metadata.name }}"
 
-    # ==============================================================================
-    # FASE 2.2: FORMATAÇÃO DE TEXTO (Sem dependências externas)
-    # ==============================================================================
-    - name: "2.2 Formatar Lista de Perfis de Performance"
+    - name: "2.2 Formatar Perfis de Performance"
       set_fact:
-        formatted_profiles: "{{ formatted_profiles + ['  🚀 Profile: ' ~ item.metadata.name ~ ' | Isolated CPUs: ' ~ (item.spec.cpu.isolated | default('N/A'))] }}"
-      loop: "{{ perf_profiles.resources | default([]) }}"
+        formatted_profiles: "{{ formatted_profiles + ['  🚀 Profile: ' ~ item.metadata.name ~ ' | Isolated: ' ~ (item.spec.cpu.isolated | default('N/A'))] }}"
+      loop: "{{ k8s_extras.results[1].resources | default([]) }}"
       loop_control:
         label: "Profile: {{ item.metadata.name }}"
-      when: perf_profiles.resources is defined
 
     # ==============================================================================
-    # FASE 3: EXIBIÇÃO
+    # FASE 3: RELATÓRIO FINAL
     # ==============================================================================
     
     - name: "CABEÇALHO"
       debug:
         msg: 
           - "############################################################"
-          - "      RELATÓRIO: CAPACIDADE & PERFORMANCE TUNING (RHBP)"
+          - "           RELATÓRIO DE CAPACIDADE "
           - "############################################################"
 
     # --- BLOCO 1: COMPUTAÇÃO ---
@@ -109,21 +113,59 @@
         msg:
           - "------------------------------------------------------------"
           - "CPU (vCores):"
-          - "  🔹 Capacity:    {{ cluster_stats.cpu_cap | float | round(1) }}"
-          - "  🔸 Allocatable: {{ cluster_stats.cpu_alloc | float | round(1) }}"
+          - "  🔹 Total Físico (Capacity):    {{ cluster_stats.cpu_cap | float | round(1) }}"
+          - "  🔸 Disponível Pods (Alloc):    {{ cluster_stats.cpu_alloc | float | round(1) }}"
+          - "  🔻 Reservado Sistema:          {{ (cluster_stats.cpu_cap - cluster_stats.cpu_alloc) | float | round(1) }}"
           - " "
           - "MEMÓRIA (RAM):"
-          - "  🔹 Capacity:    {{ (cluster_stats.mem_cap | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Allocatable: {{ (cluster_stats.mem_alloc | float / 1024**3) | round(2) }} GiB"
+          - "  🔹 Total Físico:      {{ (cluster_stats.mem_cap | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Disponível Pods:   {{ (cluster_stats.mem_alloc | float / 1024**3) | round(2) }} GiB"
+          - "  🔻 Reservado Sistema: {{ ((cluster_stats.mem_cap - cluster_stats.mem_alloc) | float / 1024**3) | round(2) }} GiB"
           - "------------------------------------------------------------"
 
-    # --- BLOCO 2: ARMAZENAMENTO ---
+    # --- BLOCO 2: ARMAZENAMENTO (CORRIGIDO) ---
     - name: "💾 RELATÓRIO [2/4]: Armazenamento (Ephemeral)"
       debug:
         msg:
           - "------------------------------------------------------------"
-          - "  🔹 Capacity:    {{ (cluster_stats.disk_cap | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Allocatable: {{ (cluster_stats.disk_alloc | float / 1024**3) | round(2) }} GiB"
+          - "  🔹 Total Físico (Capacity):    {{ (cluster_stats.disk_cap | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Disponível Pods (Alloc):    {{ (cluster_stats.disk_alloc | float / 1024**3) | round(2) }} GiB"
+          - "  🔻 Reservado Sistema (Logs/OS):{{ ((cluster_stats.disk_cap - cluster_stats.disk_alloc) | float / 1024**3) | round(2) }} GiB"
           - "------------------------------------------------------------"
 
-    # --- BLOCO 3
+    # --- BLOCO 3: SR-IOV ---
+    - name: "🌐 RELATÓRIO [3/4]: Rede SR-IOV"
+      debug:
+        msg: "{{ header + status_msg + footer }}"
+      vars:
+        result_sriov: "{{ k8s_extras.results[0] }}"
+        header: ["------------------------------------------------------------", "SR-IOV STATUS:"]
+        status_msg: >-
+          {{
+            ['  ❌ ERRO DE API: ' ~ result_sriov.msg] if result_sriov.failed else
+            ((result_sriov.resources | map(attribute='metadata.name') | map('regex_replace', '^', '  ⚡ Policy: ') | list) if result_sriov.resources else ['  ⚠️  Nenhuma política encontrada.'])
+          }}
+        footer: ["------------------------------------------------------------"]
+
+    # --- BLOCO 4: TUNING ---
+    - name: "⚡ RELATÓRIO [4/4]: Tuning"
+      debug:
+        msg: "{{ header + status_msg + hugepages + footer }}"
+      vars:
+        result_perf: "{{ k8s_extras.results[1] }}"
+        header: ["------------------------------------------------------------", "PERFORMANCE PROFILES:"]
+        status_msg: >-
+          {{
+            ['  ❌ ERRO DE API: ' ~ result_perf.msg] if result_perf.failed else
+            (formatted_profiles if formatted_profiles else ['  ⚠️  Nenhum perfil aplicado.'])
+          }}
+        hugepages:
+          - " "
+          - "HUGEPAGES (Total Configurado):"
+          - "  1Gi: {{ (cluster_stats.hugepages_total_1gi | float / 1024**3) | round(0) }} GiB"
+          - "  2Mi: {{ (cluster_stats.hugepages_total_2mi | float / 1024**2) | round(0) }} MiB"
+        footer: ["------------------------------------------------------------"]
+    
+    - name: "FIM"
+      debug:
+        msg: "############################################################"
