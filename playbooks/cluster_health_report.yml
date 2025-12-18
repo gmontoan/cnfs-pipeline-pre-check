@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v11: Capacidade Real (Type Fix)"
+- name: "Relatório v1: Capacidade Real"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -96,14 +96,14 @@
         label: "Profile: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # FASE 3: RELATÓRIO FINAL (CORREÇÃO DE TIPOS AQUI)
+    # FASE 3: RELATÓRIO FINAL 
     # ==============================================================================
     
     - name: "CABEÇALHO"
       debug:
         msg: 
           - "############################################################"
-          - "           RELATÓRIO DE CAPACIDADE (TYPE-SAFE)"
+          - "           RELATÓRIO DE CAPACIDADE "
           - "############################################################"
 
     # --- BLOCO 1: COMPUTAÇÃO ---
