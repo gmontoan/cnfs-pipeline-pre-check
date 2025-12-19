@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v18: Dashboard Completo (Safe Copy)"
+- name: "Relatório v19: Dashboard Final (Lógica Blindada)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -17,7 +17,8 @@
 
     # Listas auxiliares
     all_containers_list: []
-    sriov_messages: []
+    # Inicializa a mensagem do SR-IOV vazia
+    sriov_final_msg: []
 
   tasks:
     # ==============================================================================
@@ -71,7 +72,7 @@
       set_fact:
         all_containers_list: "{{ all_pods.resources | map(attribute='spec.containers') | flatten }}"
 
-    - name: "3.2 Somar Requests (Lógica Simplificada)"
+    - name: "3.2 Somar Requests"
       set_fact:
         # --- CPU ---
         used_cpu_req: >-
@@ -110,26 +111,3 @@
       
       vars:
         cpu_val:  "{{ item.resources.requests.cpu | default('0') }}"
-        mem_val:  "{{ item.resources.requests.memory | default('0') }}"
-        disk_val: "{{ item.resources.requests['ephemeral-storage'] | default('0') }}"
-      
-      loop: "{{ all_containers_list }}"
-      loop_control:
-        label: "Math processing..."
-      when: 
-        - item.resources is defined
-        - item.resources.requests is defined
-
-    # ==============================================================================
-    # 4. PREPARAR TEXTOS
-    # ==============================================================================
-    - name: "4.1 Definir Status SR-IOV"
-      set_fact:
-        sriov_messages: >-
-          {{
-            ['  ❌ ERRO: Operador SR-IOV não detectado ou sem permissão.']
-            if sriov_policies.failed | default(false)
-            else (
-              (sriov_policies.resources | map(attribute='metadata.name') | map('regex_replace', '^', '  ⚡ Policy: ') | list)
-              if (sriov_policies.resources | default([]) | length > 0)
-              else ['  ⚠️  Nenhuma política
