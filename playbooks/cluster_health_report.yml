@@ -1,34 +1,35 @@
 ---
-- name: "Relatório v14: Dashboard de Capacidade Real e Rede"
+- name: "Relatório v15: Dashboard Final (Syntax Safe)"
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    # --- VARIÁVEIS DE HARDWARE (ALLOCATABLE) ---
+    # --- VARIÁVEIS DE HARDWARE ---
     total_cpu_alloc: 0
     total_mem_alloc: 0
     total_disk_alloc: 0
     
-    # --- VARIÁVEIS DE CONSUMO (REQUESTS) ---
+    # --- VARIÁVEIS DE CONSUMO ---
     used_cpu_req: 0
     used_mem_req: 0
     used_disk_req: 0
 
-    # Lista temporária
+    # Listas auxiliares
     all_containers_list: []
+    sriov_messages: []
 
   tasks:
     # ==============================================================================
-    # 1. COLETA DE DADOS (INFRA + WORKLOAD + REDE)
+    # 1. COLETA DE DADOS
     # ==============================================================================
-    - name: "1.1 Buscar Nodes (Hardware)"
+    - name: "1.1 Buscar Nodes"
       kubernetes.core.k8s_info:
         kind: Node
         api_version: v1
       register: node_list
 
-    - name: "1.2 Buscar Pods em Execução (Carga)"
+    - name: "1.2 Buscar Pods em Execução"
       kubernetes.core.k8s_info:
         kind: Pod
         api_version: v1
@@ -36,28 +37,23 @@
           - status.phase=Running
       register: all_pods
 
-    - name: "1.3 Buscar SR-IOV (Network Capabilities)"
+    - name: "1.3 Buscar SR-IOV"
       kubernetes.core.k8s_info:
         api_version: sriovnetwork.openshift.io/v1
         kind: SriovNetworkNodePolicy
         namespace: openshift-sriov
       register: sriov_policies
-      failed_when: false # Não falha se não tiver SR-IOV
+      failed_when: false
 
     # ==============================================================================
-    # 2. CÁLCULO: CAPACIDADE TOTAL (NODES)
+    # 2. CÁLCULOS DE CAPACIDADE
     # ==============================================================================
     - name: "2.1 Somar Capacidade dos Nodes"
       set_fact:
-        # CPU: m -> core
         total_cpu_alloc: >-
           {{ total_cpu_alloc | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}
-        
-        # MEM: Ki -> Bytes
         total_mem_alloc: >-
           {{ total_mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
-        
-        # DISK: Ki/Bytes -> Bytes
         total_disk_alloc: >-
           {{ total_disk_alloc | float + (
              (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
@@ -68,16 +64,12 @@
       loop_control:
         label: "Node: {{ item.metadata.name }}"
 
-    # ==============================================================================
-    # 3. CÁLCULO: CONSUMO REAL (POD REQUESTS)
-    # ==============================================================================
     - name: "3.1 Preparar Lista de Containers"
       set_fact:
         all_containers_list: "{{ all_pods.resources | map(attribute='spec.containers') | flatten }}"
 
     - name: "3.2 Somar Requests dos Containers"
       set_fact:
-        # CPU Request
         used_cpu_req: >-
           {{
             used_cpu_req | float +
@@ -87,7 +79,6 @@
               else (item.resources.requests.cpu | default('0') | float)
             )
           }}
-        # Memory Request
         used_mem_req: >-
           {{
              used_mem_req | float +
@@ -98,89 +89,10 @@
                (item.resources.requests.memory | default('0') | float)
              )
           }}
-        # Disk Request (Ephemeral)
         used_disk_req: >-
           {{
              used_disk_req | float +
              (
                (item.resources.requests['ephemeral-storage'] | default('0') | regex_replace('Gi','') | float * 1024**3) if 'Gi' in (item.resources.requests['ephemeral-storage'] | default('0') | string) else
                (item.resources.requests['ephemeral-storage'] | default('0') | regex_replace('Mi','') | float * 1024**2) if 'Mi' in (item.resources.requests['ephemeral-storage'] | default('0') | string) else
-               (item.resources.requests['ephemeral-storage'] | default('0') | regex_replace('Ki','') | float * 1024)    if 'Ki' in (item.resources.requests['ephemeral-storage'] | default('0') | string) else
-               (item.resources.requests['ephemeral-storage'] | default('0') | float)
-             )
-          }}
-      loop: "{{ all_containers_list }}"
-      loop_control:
-        label: "Processing container..."
-      when: 
-        - item.resources is defined
-        - item.resources.requests is defined
-
-    # ==============================================================================
-    # 4. DASHBOARD (EXIBIÇÃO EM BLOCOS)
-    # ==============================================================================
-
-    - name: "CABEÇALHO DO CLUSTER"
-      debug:
-        msg:
-          - "############################################################"
-          - "          DASHBOARD DE CAPACIDADE REAL & REDE"
-          - "############################################################"
-          - "Nodes: {{ node_list.resources | length }} | Pods Ativos: {{ all_pods.resources | length }}"
-
-    # --- BLOCO 1: CPU ---
-    - name: "📊 1. PROCESSAMENTO (CPU)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Cluster (Allocatable):  {{ total_cpu_alloc | float | round(1) }} Cores"
-          - "  🔸 Comprometido (Requests):      {{ used_cpu_req | float | round(1) }} Cores"
-          - "  🟢 DISPONÍVEL (Sobras):          {{ (total_cpu_alloc | float - used_cpu_req | float) | round(1) }} Cores"
-          - "  📉 Taxa de Ocupação:             {{ ((used_cpu_req | float / total_cpu_alloc | float) * 100) | round(1) }}%"
-          - "------------------------------------------------------------"
-
-    # --- BLOCO 2: MEMÓRIA ---
-    - name: "🧠 2. MEMÓRIA (RAM)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Cluster (Allocatable):  {{ (total_mem_alloc | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Comprometido (Requests):      {{ (used_mem_req | float / 1024**3) | round(2) }} GiB"
-          - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_mem_alloc | float - used_mem_req | float) / 1024**3) | round(2) }} GiB"
-          - "  📉 Taxa de Ocupação:             {{ ((used_mem_req | float / total_mem_alloc | float) * 100) | round(1) }}%"
-          - "------------------------------------------------------------"
-
-    # --- BLOCO 3: DISCO ---
-    - name: "💾 3. ARMAZENAMENTO (Ephemeral/Local)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Cluster (Allocatable):  {{ (total_disk_alloc | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Comprometido (Requests):      {{ (used_disk_req | float / 1024**3) | round(2) }} GiB"
-          - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_disk_alloc | float - used_disk_req | float) / 1024**3) | round(2) }} GiB"
-          - "------------------------------------------------------------"
-
-    # --- BLOCO 4: REDE / SR-IOV ---
-    - name: "🌐 4. CAPACIDADES DE REDE (SR-IOV)"
-      debug:
-        msg: "{{ header + status_msg + footer }}"
-      vars:
-        is_failed: "{{ sriov_policies.failed | default(false) }}"
-        found_resources: "{{ sriov_policies.resources | default([]) | length > 0 }}"
-        
-        header: ["------------------------------------------------------------"]
-        
-        status_msg: >-
-          {{
-            ['  ❌ ERRO: O Operador SR-IOV não parece estar instalado ou acessível.']
-            if is_failed
-            else (
-              (sriov_policies.resources | map(attribute='metadata.name') | map('regex_replace', '^', '  ⚡ Policy Detectada: ') | list)
-              if found_resources
-              else ['  ⚠️  Nenhuma política SR-IOV configurada neste cluster.']
-            )
-          }}
-          
-        footer: 
-          - "------------------------------------------------------------"
-          - "################################################
+               (item.resources.requests['ephemeral-storage'] | default('0') | regex_replace('Ki','') | float * 1024)    if 'Ki' in (
