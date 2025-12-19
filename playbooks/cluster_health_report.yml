@@ -1,173 +1,96 @@
 ---
-- name: "Relatório v1: Capacidade Real"
+- name: "Relatório v12: Uso Real vs Capacidade (Requests)"
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    cluster_stats:
-      cpu_cap: 0
-      cpu_alloc: 0
-      mem_cap: 0
-      mem_alloc: 0
-      disk_cap: 0
-      disk_alloc: 0
-      hugepages_total_1gi: 0
-      hugepages_free_1gi: 0
-      hugepages_total_2mi: 0
-      hugepages_free_2mi: 0
-    formatted_profiles: []
+    # Totais de Hardware (Capacidade)
+    total_cpu_allocatable: 0
+    total_mem_allocatable: 0
+    
+    # Totais Consumidos pelos Pods (Requests)
+    used_cpu_requests: 0
+    used_mem_requests: 0
 
   tasks:
     # ==============================================================================
-    # FASE 1: COLETA
+    # 1. COLETAR DADOS (NODES + PODS)
     # ==============================================================================
-    - name: "1.1 Buscar Nodes"
+    - name: "1.1 Buscar Nodes (Hardware)"
       kubernetes.core.k8s_info:
         kind: Node
         api_version: v1
       register: node_list
 
-    - name: "1.2 Buscar Configuração de Rede"
+    - name: "1.2 Buscar TODOS os Pods (Carga de Trabalho)"
       kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: Network
-        name: cluster
-      register: net_config
-
-    - name: "1.3 Buscar SR-IOV e Perfis (Diagnostic Mode)"
-      kubernetes.core.k8s_info:
-        api_version: "{{ item.api }}"
-        kind: "{{ item.kind }}"
-        namespace: "{{ item.ns | default(omit) }}"
-      loop:
-        - { api: 'sriovnetwork.openshift.io/v1', kind: 'SriovNetworkNodePolicy', ns: 'openshift-sriov' }
-        - { api: 'performance.openshift.io/v2', kind: 'PerformanceProfile' }
-      register: k8s_extras
-      failed_when: false
+        kind: Pod
+        api_version: v1
+        field_selectors:
+          - status.phase=Running
+      register: all_pods
 
     # ==============================================================================
-    # FASE 2: CÁLCULO (Soma Incremental)
+    # 2. CALCULAR CAPACIDADE DO HARDWARE (Igual ao anterior)
     # ==============================================================================
-    - name: "2.1 Processar Soma de Recursos"
+    - name: "2.1 Somar Capacidade dos Nodes"
       set_fact:
-        cluster_stats:
-          # CPU
-          cpu_cap: >-
-            {{ cluster_stats.cpu_cap | float + (item.status.capacity.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.capacity.cpu else item.status.capacity.cpu | float) }}
-          cpu_alloc: >-
-            {{ cluster_stats.cpu_alloc | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}
-          
-          # MEMÓRIA
-          mem_cap: >-
-            {{ cluster_stats.mem_cap | float + (item.status.capacity.memory | regex_replace('Ki','') | float * 1024) }}
-          mem_alloc: >-
-            {{ cluster_stats.mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
-          
-          # DISCO (Lógica Híbrida Ki/Bytes)
-          disk_cap: >-
-            {{ cluster_stats.disk_cap | float + (
-               (item.status.capacity['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
-               if 'Ki' in item.status.capacity['ephemeral-storage'] 
-               else item.status.capacity['ephemeral-storage'] | float 
-            ) }}
-          disk_alloc: >-
-            {{ cluster_stats.disk_alloc | float + (
-               (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
-               if 'Ki' in item.status.allocatable['ephemeral-storage'] 
-               else item.status.allocatable['ephemeral-storage'] | float 
-            ) }}
-
-          # HUGEPAGES
-          hugepages_total_1gi: >-
-            {{ cluster_stats.hugepages_total_1gi | float + (item.status.capacity['hugepages-1Gi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
-          hugepages_total_2mi: >-
-            {{ cluster_stats.hugepages_total_2mi | float + (item.status.capacity['hugepages-2Mi'] | default('0') | regex_replace('Ki','') | float * 1024) }}
-
+        total_cpu_allocatable: >-
+          {{ total_cpu_allocatable | float + (item.status.allocatable.cpu | regex_replace('m','') | float / 1000 if 'm' in item.status.allocatable.cpu else item.status.allocatable.cpu | float) }}
+        total_mem_allocatable: >-
+          {{ total_mem_allocatable | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
       loop: "{{ node_list.resources }}"
       loop_control:
         label: "Node: {{ item.metadata.name }}"
 
-    - name: "2.2 Formatar Perfis de Performance"
+    # ==============================================================================
+    # 3. CALCULAR CONSUMO DOS PODS (A MÁGICA ACONTECE AQUI)
+    # ==============================================================================
+    # Esta task varre cada container de cada pod rodando e soma os 'requests'
+    - name: "3.1 Somar Requests dos Pods"
       set_fact:
-        formatted_profiles: "{{ formatted_profiles + ['  🚀 Profile: ' ~ item.metadata.name ~ ' | Isolated: ' ~ (item.spec.cpu.isolated | default('N/A'))] }}"
-      loop: "{{ k8s_extras.results[1].resources | default([]) }}"
+        used_cpu_requests: >-
+          {{
+            used_cpu_requests | float +
+            (container.resources.requests.cpu | default('0') | regex_replace('m','') | float / 1000 if 'm' in (container.resources.requests.cpu | default('0')) 
+             else container.resources.requests.cpu | default('0') | float)
+          }}
+        used_mem_requests: >-
+          {{
+             used_mem_requests | float +
+             (
+               (container.resources.requests.memory | default('0') | regex_replace('Gi','') | float * 1024 * 1024 * 1024) if 'Gi' in (container.resources.requests.memory | default('0')) else
+               (container.resources.requests.memory | default('0') | regex_replace('Mi','') | float * 1024 * 1024) if 'Mi' in (container.resources.requests.memory | default('0')) else
+               (container.resources.requests.memory | default('0') | regex_replace('Ki','') | float * 1024) if 'Ki' in (container.resources.requests.memory | default('0')) else
+               container.resources.requests.memory | default('0') | float
+             )
+          }}
+      loop: "{{ all_pods.resources | subelements('spec.containers') }}"
       loop_control:
-        label: "Profile: {{ item.metadata.name }}"
+        loop_var: container
+        label: "Processing container"
 
     # ==============================================================================
-    # FASE 3: RELATÓRIO FINAL 
+    # 4. EXIBIR RELATÓRIO DE "SOBRAS"
     # ==============================================================================
-    
-    - name: "CABEÇALHO"
-      debug:
-        msg: 
-          - "############################################################"
-          - "           RELATÓRIO DE CAPACIDADE "
-          - "############################################################"
-
-    # --- BLOCO 1: COMPUTAÇÃO ---
-    - name: "📊 RELATÓRIO [1/4]: Computação"
+    - name: "📊 RELATÓRIO DE DISPONIBILIDADE REAL (LIVRE PARA NOVO DEPLOY)"
       debug:
         msg:
+          - "############################################################"
+          - "      CAPACIDADE REAL (DISPONÍVEL AGORA)"
+          - "############################################################"
+          - "Nodes Ativos: {{ node_list.resources | length }} | Pods Rodando: {{ all_pods.resources | length }}"
           - "------------------------------------------------------------"
-          - "CPU (vCores):"
-          - "  🔹 Total Físico (Capacity):    {{ cluster_stats.cpu_cap | float | round(1) }}"
-          - "  🔸 Disponível Pods (Alloc):    {{ cluster_stats.cpu_alloc | float | round(1) }}"
-          # CORREÇÃO ABAIXO: Adicionado | float em cada variável antes da subtração
-          - "  🔻 Reservado Sistema:          {{ (cluster_stats.cpu_cap | float - cluster_stats.cpu_alloc | float) | round(1) }}"
+          - "CPU (Cores):"
+          - "  🔹 Total Cluster (Allocatable):  {{ total_cpu_allocatable | float | round(1) }}"
+          - "  🔸 Usado por Pods (Requests):    {{ used_cpu_requests | float | round(1) }}"
+          - "  🟢 LIVRE PARA USO:               {{ (total_cpu_allocatable | float - used_cpu_requests | float) | round(1) }}"
+          - "  📊 Porcentagem Livre:            {{ (((total_cpu_allocatable | float - used_cpu_requests | float) / total_cpu_allocatable | float) * 100) | round(1) }}%"
           - " "
-          - "MEMÓRIA (RAM):"
-          - "  🔹 Total Físico:      {{ (cluster_stats.mem_cap | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Disponível Pods:   {{ (cluster_stats.mem_alloc | float / 1024**3) | round(2) }} GiB"
-          # CORREÇÃO ABAIXO: Cast explícito antes do calculo
-          - "  🔻 Reservado Sistema: {{ ((cluster_stats.mem_cap | float - cluster_stats.mem_alloc | float) / 1024**3) | round(2) }} GiB"
-          - "------------------------------------------------------------"
-
-    # --- BLOCO 2: ARMAZENAMENTO ---
-    - name: "💾 RELATÓRIO [2/4]: Armazenamento (Ephemeral)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Físico (Capacity):    {{ (cluster_stats.disk_cap | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Disponível Pods (Alloc):    {{ (cluster_stats.disk_alloc | float / 1024**3) | round(2) }} GiB"
-          # CORREÇÃO ABAIXO: Cast explícito antes do calculo
-          - "  🔻 Reservado Sistema (Logs/OS):{{ ((cluster_stats.disk_cap | float - cluster_stats.disk_alloc | float) / 1024**3) | round(2) }} GiB"
-          - "------------------------------------------------------------"
-
-    # --- BLOCO 3: SR-IOV ---
-    - name: "🌐 RELATÓRIO [3/4]: Rede SR-IOV"
-      debug:
-        msg: "{{ header + status_msg + footer }}"
-      vars:
-        result_sriov: "{{ k8s_extras.results[0] }}"
-        header: ["------------------------------------------------------------", "SR-IOV STATUS:"]
-        status_msg: >-
-          {{
-            ['  ❌ ERRO DE API: ' ~ result_sriov.msg] if result_sriov.failed else
-            ((result_sriov.resources | map(attribute='metadata.name') | map('regex_replace', '^', '  ⚡ Policy: ') | list) if result_sriov.resources else ['  ⚠️  Nenhuma política encontrada.'])
-          }}
-        footer: ["------------------------------------------------------------"]
-
-    # --- BLOCO 4: TUNING ---
-    - name: "⚡ RELATÓRIO [4/4]: Tuning"
-      debug:
-        msg: "{{ header + status_msg + hugepages + footer }}"
-      vars:
-        result_perf: "{{ k8s_extras.results[1] }}"
-        header: ["------------------------------------------------------------", "PERFORMANCE PROFILES:"]
-        status_msg: >-
-          {{
-            ['  ❌ ERRO DE API: ' ~ result_perf.msg] if result_perf.failed else
-            (formatted_profiles if formatted_profiles else ['  ⚠️  Nenhum perfil aplicado.'])
-          }}
-        hugepages:
-          - " "
-          - "HUGEPAGES (Total Configurado):"
-          - "  1Gi: {{ (cluster_stats.hugepages_total_1gi | float / 1024**3) | round(0) }} GiB"
-          - "  2Mi: {{ (cluster_stats.hugepages_total_2mi | float / 1024**2) | round(0) }} MiB"
-        footer: ["------------------------------------------------------------"]
-    
-    - name: "FIM"
-      debug:
-        msg: "############################################################"
+          - "MEMÓRIA (GiB):"
+          - "  🔹 Total Cluster (Allocatable):  {{ (total_mem_allocatable | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Usado por Pods (Requests):    {{ (used_mem_requests | float / 1024**3) | round(2) }} GiB"
+          - "  🟢 LIVRE PARA USO:               {{ ((total_mem_allocatable | float - used_mem_requests | float) / 1024**3) | round(2) }} GiB"
+          - "  📊 Porcentagem Livre:            {{ (((total_mem_allocatable | float - used_mem_requests | float) / total_mem_allocatable | float) * 100) | round(1) }}%"
+          - "############################################################"
