@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v16: Dashboard Estável (Fix Disk Math)"
+- name: "Relatório v17: Dashboard Completo (+ Storage %)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -46,7 +46,7 @@
       failed_when: false
 
     # ==============================================================================
-    # 2. CÁLCULOS DE CAPACIDADE (NODES)
+    # 2. CÁLCULOS DE CAPACIDADE (HARDWARE)
     # ==============================================================================
     - name: "2.1 Somar Capacidade dos Nodes"
       set_fact:
@@ -65,7 +65,7 @@
         label: "Node: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # 3. CÁLCULOS DE CONSUMO (PODS) - CORRIGIDO
+    # 3. CÁLCULOS DE CONSUMO (POD REQUESTS)
     # ==============================================================================
     - name: "3.1 Preparar Lista de Containers"
       set_fact:
@@ -96,7 +96,7 @@
              )
           }}
 
-        # --- DISK (CORRIGIDO: Variavel curta) ---
+        # --- DISK ---
         used_disk_req: >-
           {{
              used_disk_req | float +
@@ -108,7 +108,6 @@
              )
           }}
       
-      # Define variáveis locais no loop para encurtar as linhas e evitar erro de parser
       vars:
         cpu_val:  "{{ item.resources.requests.cpu | default('0') }}"
         mem_val:  "{{ item.resources.requests.memory | default('0') }}"
@@ -169,6 +168,7 @@
           - "  📉 Taxa de Ocupação:             {{ ((used_mem_req | float / total_mem_alloc | float) * 100) | round(1) }}%"
           - "------------------------------------------------------------"
 
+    # AGORA COM A LINHA DE PORCENTAGEM ADICIONADA
     - name: "💾 3. ARMAZENAMENTO (Ephemeral)"
       debug:
         msg:
@@ -176,13 +176,4 @@
           - "  🔹 Total Cluster (Allocatable):  {{ (total_disk_alloc | float / 1024**3) | round(2) }} GiB"
           - "  🔸 Comprometido (Requests):      {{ (used_disk_req | float / 1024**3) | round(2) }} GiB"
           - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_disk_alloc | float - used_disk_req | float) / 1024**3) | round(2) }} GiB"
-          - "------------------------------------------------------------"
-
-    - name: "🌐 4. CAPACIDADES DE REDE (SR-IOV)"
-      debug:
-        msg: "{{ header + sriov_messages + footer }}"
-      vars:
-        header: ["------------------------------------------------------------"]
-        footer: 
-          - "------------------------------------------------------------"
-          - "############################################################"
+          - "  📉 Taxa de Ocupação:             {{ ((used_disk_
