@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v17: Dashboard Completo (+ Storage %)"
+- name: "Relatório v18: Dashboard Completo (Safe Copy)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -132,48 +132,4 @@
             else (
               (sriov_policies.resources | map(attribute='metadata.name') | map('regex_replace', '^', '  ⚡ Policy: ') | list)
               if (sriov_policies.resources | default([]) | length > 0)
-              else ['  ⚠️  Nenhuma política SR-IOV configurada.']
-            )
-          }}
-
-    # ==============================================================================
-    # 5. DASHBOARD FINAL
-    # ==============================================================================
-
-    - name: "CABEÇALHO DO CLUSTER"
-      debug:
-        msg:
-          - "############################################################"
-          - "          DASHBOARD DE CAPACIDADE REAL & REDE"
-          - "############################################################"
-          - "Nodes: {{ node_list.resources | length }} | Pods Ativos: {{ all_pods.resources | length }}"
-
-    - name: "📊 1. PROCESSAMENTO (CPU)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Cluster (Allocatable):  {{ total_cpu_alloc | float | round(1) }} Cores"
-          - "  🔸 Comprometido (Requests):      {{ used_cpu_req | float | round(1) }} Cores"
-          - "  🟢 DISPONÍVEL (Sobras):          {{ (total_cpu_alloc | float - used_cpu_req | float) | round(1) }} Cores"
-          - "  📉 Taxa de Ocupação:             {{ ((used_cpu_req | float / total_cpu_alloc | float) * 100) | round(1) }}%"
-          - "------------------------------------------------------------"
-
-    - name: "🧠 2. MEMÓRIA (RAM)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Cluster (Allocatable):  {{ (total_mem_alloc | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Comprometido (Requests):      {{ (used_mem_req | float / 1024**3) | round(2) }} GiB"
-          - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_mem_alloc | float - used_mem_req | float) / 1024**3) | round(2) }} GiB"
-          - "  📉 Taxa de Ocupação:             {{ ((used_mem_req | float / total_mem_alloc | float) * 100) | round(1) }}%"
-          - "------------------------------------------------------------"
-
-    # AGORA COM A LINHA DE PORCENTAGEM ADICIONADA
-    - name: "💾 3. ARMAZENAMENTO (Ephemeral)"
-      debug:
-        msg:
-          - "------------------------------------------------------------"
-          - "  🔹 Total Cluster (Allocatable):  {{ (total_disk_alloc | float / 1024**3) | round(2) }} GiB"
-          - "  🔸 Comprometido (Requests):      {{ (used_disk_req | float / 1024**3) | round(2) }} GiB"
-          - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_disk_alloc | float - used_disk_req | float) / 1024**3) | round(2) }} GiB"
-          - "  📉 Taxa de Ocupação:             {{ ((used_disk_
+              else ['  ⚠️  Nenhuma política
