@@ -1,29 +1,28 @@
 ---
-- name: "Relatório v12: Uso Real vs Capacidade (Requests)"
+- name: "Relatório v13: Uso Real (Fix Loop)"
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    # Totais de Hardware (Capacidade)
     total_cpu_allocatable: 0
     total_mem_allocatable: 0
-    
-    # Totais Consumidos pelos Pods (Requests)
     used_cpu_requests: 0
     used_mem_requests: 0
+    # Lista temporária para facilitar o loop
+    all_containers_list: []
 
   tasks:
     # ==============================================================================
-    # 1. COLETAR DADOS (NODES + PODS)
+    # 1. COLETAR DADOS
     # ==============================================================================
-    - name: "1.1 Buscar Nodes (Hardware)"
+    - name: "1.1 Buscar Nodes"
       kubernetes.core.k8s_info:
         kind: Node
         api_version: v1
       register: node_list
 
-    - name: "1.2 Buscar TODOS os Pods (Carga de Trabalho)"
+    - name: "1.2 Buscar TODOS os Pods (Running)"
       kubernetes.core.k8s_info:
         kind: Pod
         api_version: v1
@@ -32,7 +31,7 @@
       register: all_pods
 
     # ==============================================================================
-    # 2. CALCULAR CAPACIDADE DO HARDWARE (Igual ao anterior)
+    # 2. CALCULAR CAPACIDADE DOS NODES (Hardware)
     # ==============================================================================
     - name: "2.1 Somar Capacidade dos Nodes"
       set_fact:
@@ -45,34 +44,47 @@
         label: "Node: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # 3. CALCULAR CONSUMO DOS PODS (A MÁGICA ACONTECE AQUI)
+    # 3. PREPARAR LISTA DE CONTAINERS (Correção do Bug)
     # ==============================================================================
-    # Esta task varre cada container de cada pod rodando e soma os 'requests'
-    - name: "3.1 Somar Requests dos Pods"
+    - name: "3.1 Extrair e Achatar Lista de Containers"
+      set_fact:
+        # Pega a lista de pods, extrai 'spec.containers' de cada um e achata numa lista única
+        all_containers_list: "{{ all_pods.resources | map(attribute='spec.containers') | flatten }}"
+
+    # ==============================================================================
+    # 4. SOMAR REQUESTS (Loop na lista correta)
+    # ==============================================================================
+    - name: "4.1 Somar Requests de CPU e Memória"
       set_fact:
         used_cpu_requests: >-
           {{
             used_cpu_requests | float +
-            (container.resources.requests.cpu | default('0') | regex_replace('m','') | float / 1000 if 'm' in (container.resources.requests.cpu | default('0')) 
-             else container.resources.requests.cpu | default('0') | float)
+            (
+              (item.resources.requests.cpu | default('0') | regex_replace('m','') | float / 1000) 
+              if 'm' in (item.resources.requests.cpu | default('0') | string)
+              else (item.resources.requests.cpu | default('0') | float)
+            )
           }}
         used_mem_requests: >-
           {{
              used_mem_requests | float +
              (
-               (container.resources.requests.memory | default('0') | regex_replace('Gi','') | float * 1024 * 1024 * 1024) if 'Gi' in (container.resources.requests.memory | default('0')) else
-               (container.resources.requests.memory | default('0') | regex_replace('Mi','') | float * 1024 * 1024) if 'Mi' in (container.resources.requests.memory | default('0')) else
-               (container.resources.requests.memory | default('0') | regex_replace('Ki','') | float * 1024) if 'Ki' in (container.resources.requests.memory | default('0')) else
-               container.resources.requests.memory | default('0') | float
+               (item.resources.requests.memory | default('0') | regex_replace('Gi','') | float * 1024**3) if 'Gi' in (item.resources.requests.memory | default('0') | string) else
+               (item.resources.requests.memory | default('0') | regex_replace('Mi','') | float * 1024**2) if 'Mi' in (item.resources.requests.memory | default('0') | string) else
+               (item.resources.requests.memory | default('0') | regex_replace('Ki','') | float * 1024)    if 'Ki' in (item.resources.requests.memory | default('0') | string) else
+               (item.resources.requests.memory | default('0') | float)
              )
           }}
-      loop: "{{ all_pods.resources | subelements('spec.containers') }}"
+      # Filtra apenas containers que tenham 'requests' definidos para evitar erros
+      loop: "{{ all_containers_list }}"
       loop_control:
-        loop_var: container
-        label: "Processing container"
+        label: "Processing container resource math..."
+      when: 
+        - item.resources is defined
+        - item.resources.requests is defined
 
     # ==============================================================================
-    # 4. EXIBIR RELATÓRIO DE "SOBRAS"
+    # 5. EXIBIR RELATÓRIO
     # ==============================================================================
     - name: "📊 RELATÓRIO DE DISPONIBILIDADE REAL (LIVRE PARA NOVO DEPLOY)"
       debug:
@@ -80,7 +92,7 @@
           - "############################################################"
           - "      CAPACIDADE REAL (DISPONÍVEL AGORA)"
           - "############################################################"
-          - "Nodes Ativos: {{ node_list.resources | length }} | Pods Rodando: {{ all_pods.resources | length }}"
+          - "Nodes Ativos: {{ node_list.resources | length }} | Pods Rodando: {{ all_pods.resources | length }} | Containers: {{ all_containers_list | length }}"
           - "------------------------------------------------------------"
           - "CPU (Cores):"
           - "  🔹 Total Cluster (Allocatable):  {{ total_cpu_allocatable | float | round(1) }}"
