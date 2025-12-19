@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v19: Dashboard Final (Lógica Blindada)"
+- name: "Relatório v20: Dashboard Final (Scope Safe)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -17,7 +17,6 @@
 
     # Listas auxiliares
     all_containers_list: []
-    # Inicializa a mensagem do SR-IOV vazia
     sriov_final_msg: []
 
   tasks:
@@ -66,48 +65,40 @@
         label: "Node: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # 3. CÁLCULOS DE CONSUMO (POD REQUESTS)
+    # 3. CÁLCULOS DE CONSUMO (POD REQUESTS) - CORRIGIDO
     # ==============================================================================
     - name: "3.1 Preparar Lista de Containers"
       set_fact:
         all_containers_list: "{{ all_pods.resources | map(attribute='spec.containers') | flatten }}"
 
-    - name: "3.2 Somar Requests"
+    - name: "3.2 Somar Requests (Lógica Inline Segura)"
       set_fact:
-        # --- CPU ---
+        # --- CPU (Inline) ---
         used_cpu_req: >-
           {{
             used_cpu_req | float +
             (
-              (cpu_val | regex_replace('m','') | float / 1000) 
-              if 'm' in (cpu_val | string)
-              else (cpu_val | float)
+              (item.resources.requests.cpu | default('0') | regex_replace('m','') | float / 1000) 
+              if 'm' in (item.resources.requests.cpu | default('0') | string)
+              else (item.resources.requests.cpu | default('0') | float)
             )
           }}
         
-        # --- MEMORY ---
+        # --- MEMORY (Inline) ---
         used_mem_req: >-
           {{
              used_mem_req | float +
              (
-               (mem_val | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (mem_val | string) else
-               (mem_val | regex_replace('Mi','') | float * 1048576)    if 'Mi' in (mem_val | string) else
-               (mem_val | regex_replace('Ki','') | float * 1024)       if 'Ki' in (mem_val | string) else
-               (mem_val | float)
+               (item.resources.requests.memory | default('0') | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (item.resources.requests.memory | default('0') | string) else
+               (item.resources.requests.memory | default('0') | regex_replace('Mi','') | float * 1048576)    if 'Mi' in (item.resources.requests.memory | default('0') | string) else
+               (item.resources.requests.memory | default('0') | regex_replace('Ki','') | float * 1024)       if 'Ki' in (item.resources.requests.memory | default('0') | string) else
+               (item.resources.requests.memory | default('0') | float)
              )
           }}
 
-        # --- DISK ---
+        # --- DISK (Inline) ---
         used_disk_req: >-
           {{
              used_disk_req | float +
              (
-               (disk_val | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (disk_val | string) else
-               (disk_val | regex_replace('Mi','') | float * 1048576)    if 'Mi' in (disk_val | string) else
-               (disk_val | regex_replace('Ki','') | float * 1024)       if 'Ki' in (disk_val | string) else
-               (disk_val | float)
-             )
-          }}
-      
-      vars:
-        cpu_val:  "{{ item.resources.requests.cpu | default('0') }}"
+               (item.resources.requests['ephemeral-storage'] | default('0') | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (item.resources.requests['ephemeral-
