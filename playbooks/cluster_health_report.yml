@@ -1,5 +1,5 @@
 ---
-- name: "Relatório v20: Dashboard Final (Scope Safe)"
+- name: "Relatório v21: Dashboard Final (Pythonic .get Fix)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -56,49 +56,132 @@
           {{ total_mem_alloc | float + (item.status.allocatable.memory | regex_replace('Ki','') | float * 1024) }}
         total_disk_alloc: >-
           {{ total_disk_alloc | float + (
-             (item.status.allocatable['ephemeral-storage'] | regex_replace('Ki','') | float * 1024) 
-             if 'Ki' in item.status.allocatable['ephemeral-storage'] 
-             else item.status.allocatable['ephemeral-storage'] | float 
+             (item.status.allocatable.get('ephemeral-storage') | regex_replace('Ki','') | float * 1024) 
+             if 'Ki' in (item.status.allocatable.get('ephemeral-storage') | string) 
+             else item.status.allocatable.get('ephemeral-storage') | float 
           ) }}
       loop: "{{ node_list.resources }}"
       loop_control:
         label: "Node: {{ item.metadata.name }}"
 
     # ==============================================================================
-    # 3. CÁLCULOS DE CONSUMO (POD REQUESTS) - CORRIGIDO
+    # 3. CÁLCULOS DE CONSUMO (POD REQUESTS)
     # ==============================================================================
     - name: "3.1 Preparar Lista de Containers"
       set_fact:
         all_containers_list: "{{ all_pods.resources | map(attribute='spec.containers') | flatten }}"
 
-    - name: "3.2 Somar Requests (Lógica Inline Segura)"
+    - name: "3.2 Somar Requests (Usando .get() para evitar erro de sintaxe)"
       set_fact:
-        # --- CPU (Inline) ---
+        # --- CPU ---
         used_cpu_req: >-
           {{
             used_cpu_req | float +
             (
-              (item.resources.requests.cpu | default('0') | regex_replace('m','') | float / 1000) 
-              if 'm' in (item.resources.requests.cpu | default('0') | string)
-              else (item.resources.requests.cpu | default('0') | float)
+              (item.resources.requests.get('cpu', '0') | regex_replace('m','') | float / 1000) 
+              if 'm' in (item.resources.requests.get('cpu', '0') | string)
+              else (item.resources.requests.get('cpu', '0') | float)
             )
           }}
         
-        # --- MEMORY (Inline) ---
+        # --- MEMORY ---
         used_mem_req: >-
           {{
              used_mem_req | float +
              (
-               (item.resources.requests.memory | default('0') | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (item.resources.requests.memory | default('0') | string) else
-               (item.resources.requests.memory | default('0') | regex_replace('Mi','') | float * 1048576)    if 'Mi' in (item.resources.requests.memory | default('0') | string) else
-               (item.resources.requests.memory | default('0') | regex_replace('Ki','') | float * 1024)       if 'Ki' in (item.resources.requests.memory | default('0') | string) else
-               (item.resources.requests.memory | default('0') | float)
+               (item.resources.requests.get('memory', '0') | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (item.resources.requests.get('memory', '0') | string) else
+               (item.resources.requests.get('memory', '0') | regex_replace('Mi','') | float * 1048576)    if 'Mi' in (item.resources.requests.get('memory', '0') | string) else
+               (item.resources.requests.get('memory', '0') | regex_replace('Ki','') | float * 1024)       if 'Ki' in (item.resources.requests.get('memory', '0') | string) else
+               (item.resources.requests.get('memory', '0') | float)
              )
           }}
 
-        # --- DISK (Inline) ---
+        # --- DISK (CORRIGIDO: Usando .get('ephemeral-storage')) ---
         used_disk_req: >-
           {{
              used_disk_req | float +
              (
-               (item.resources.requests['ephemeral-storage'] | default('0') | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (item.resources.requests['ephemeral-
+               (item.resources.requests.get('ephemeral-storage', '0') | regex_replace('Gi','') | float * 1073741824) if 'Gi' in (item.resources.requests.get('ephemeral-storage', '0') | string) else
+               (item.resources.requests.get('ephemeral-storage', '0') | regex_replace('Mi','') | float * 1048576)    if 'Mi' in (item.resources.requests.get('ephemeral-storage', '0') | string) else
+               (item.resources.requests.get('ephemeral-storage', '0') | regex_replace('Ki','') | float * 1024)       if 'Ki' in (item.resources.requests.get('ephemeral-storage', '0') | string) else
+               (item.resources.requests.get('ephemeral-storage', '0') | float)
+             )
+          }}
+      
+      loop: "{{ all_containers_list }}"
+      loop_control:
+        label: "Math processing..."
+      when: 
+        - item.resources is defined
+        - item.resources.requests is defined
+
+    # ==============================================================================
+    # 4. PREPARAR TEXTOS
+    # ==============================================================================
+    
+    - name: "4.1 [Lógica] Definir Padrão SR-IOV"
+      set_fact:
+        sriov_final_msg: ['  ⚠️  Nenhuma política SR-IOV configurada.']
+
+    - name: "4.2 [Lógica] Checar Erro SR-IOV"
+      set_fact:
+        sriov_final_msg: ['  ❌ ERRO: Operador SR-IOV não detectado ou sem permissão.']
+      when: sriov_policies.failed | default(false)
+
+    - name: "4.3 [Lógica] Checar Políticas SR-IOV"
+      set_fact:
+        sriov_final_msg: "{{ sriov_policies.resources | map(attribute='metadata.name') | map('regex_replace', '^', '  ⚡ Policy: ') | list }}"
+      when: 
+        - not sriov_policies.failed | default(false)
+        - sriov_policies.resources | default([]) | length > 0
+
+    # ==============================================================================
+    # 5. DASHBOARD FINAL
+    # ==============================================================================
+
+    - name: "CABEÇALHO DO CLUSTER"
+      debug:
+        msg:
+          - "############################################################"
+          - "          DASHBOARD DE CAPACIDADE REAL & REDE"
+          - "############################################################"
+          - "Nodes: {{ node_list.resources | length }} | Pods Ativos: {{ all_pods.resources | length }}"
+
+    - name: "📊 1. PROCESSAMENTO (CPU)"
+      debug:
+        msg:
+          - "------------------------------------------------------------"
+          - "  🔹 Total Cluster (Allocatable):  {{ total_cpu_alloc | float | round(1) }} Cores"
+          - "  🔸 Comprometido (Requests):      {{ used_cpu_req | float | round(1) }} Cores"
+          - "  🟢 DISPONÍVEL (Sobras):          {{ (total_cpu_alloc | float - used_cpu_req | float) | round(1) }} Cores"
+          - "  📉 Taxa de Ocupação:             {{ 0 if (total_cpu_alloc | float == 0) else ((used_cpu_req | float / total_cpu_alloc | float) * 100) | round(1) }}%"
+          - "------------------------------------------------------------"
+
+    - name: "🧠 2. MEMÓRIA (RAM)"
+      debug:
+        msg:
+          - "------------------------------------------------------------"
+          - "  🔹 Total Cluster (Allocatable):  {{ (total_mem_alloc | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Comprometido (Requests):      {{ (used_mem_req | float / 1024**3) | round(2) }} GiB"
+          - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_mem_alloc | float - used_mem_req | float) / 1024**3) | round(2) }} GiB"
+          - "  📉 Taxa de Ocupação:             {{ 0 if (total_mem_alloc | float == 0) else ((used_mem_req | float / total_mem_alloc | float) * 100) | round(1) }}%"
+          - "------------------------------------------------------------"
+
+    - name: "💾 3. ARMAZENAMENTO (Ephemeral)"
+      debug:
+        msg:
+          - "------------------------------------------------------------"
+          - "  🔹 Total Cluster (Allocatable):  {{ (total_disk_alloc | float / 1024**3) | round(2) }} GiB"
+          - "  🔸 Comprometido (Requests):      {{ (used_disk_req | float / 1024**3) | round(2) }} GiB"
+          - "  🟢 DISPONÍVEL (Sobras):          {{ ((total_disk_alloc | float - used_disk_req | float) / 1024**3) | round(2) }} GiB"
+          - "  📉 Taxa de Ocupação:             {{ 0 if (total_disk_alloc | float == 0) else ((used_disk_req | float / total_disk_alloc | float) * 100) | round(1) }}%"
+          - "------------------------------------------------------------"
+
+    - name: "🌐 4. CAPACIDADES DE REDE (SR-IOV)"
+      debug:
+        msg: "{{ header + sriov_final_msg + footer }}"
+      vars:
+        header: ["------------------------------------------------------------"]
+        footer: 
+          - "------------------------------------------------------------"
+          - "############################################################"
